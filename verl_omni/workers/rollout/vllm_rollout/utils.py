@@ -60,11 +60,32 @@ class vLLMOmniColocateWorkerExtension(CustomPipelineWorkerExtension):
             device=self.device,
             use_shm=use_shm,
         )
-        receiver.receive_weights(
-            on_bucket_received=lambda weights: self._update_weights(
-                weights, peft_config=peft_config, base_sync_done=base_sync_done
+        if peft_config and base_sync_done:
+            accumulated_weights: list[tuple[str, torch.Tensor]] = []
+
+            def _accumulate(weights: list[tuple[str, torch.Tensor]]) -> None:
+                accumulated_weights.extend(weights)
+
+            receiver.receive_weights(on_bucket_received=_accumulate)
+            try:
+                self._update_weights(
+                    accumulated_weights,
+                    peft_config=peft_config,
+                    base_sync_done=base_sync_done,
+                )
+            finally:
+                accumulated_weights.clear()
+                del accumulated_weights
+                import gc as _gc
+
+                _gc.collect()
+                torch.cuda.empty_cache()
+        else:
+            receiver.receive_weights(
+                on_bucket_received=lambda weights: self._update_weights(
+                    weights, peft_config=peft_config, base_sync_done=base_sync_done
+                )
             )
-        )
 
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:
@@ -77,6 +98,7 @@ class vLLMOmniColocateWorkerExtension(CustomPipelineWorkerExtension):
                 lora_tensors=weights,
             )
             self.add_lora(lora_request)
+            lora_request.lora_tensors = None
             logger.info(f"vLLM-Omni load weights, loaded_params: {len(weights)}")
         else:
             logger.info("Loading standard weights (async)")

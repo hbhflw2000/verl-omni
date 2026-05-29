@@ -25,10 +25,16 @@ from vllm.lora.utils import get_adapter_absolute_path
 from vllm_omni.diffusion.lora.manager import DiffusionLoRAManager, logger
 from vllm_omni.lora.request import LoRARequest as OmniLoRARequest
 
+try:
+    from vllm_omni.lora.request import TensorLoRARequest
+except ImportError:
 
-class OmniTensorLoRARequest(OmniLoRARequest):
-    peft_config: dict = field(default=None)
-    lora_tensors: dict = field(default=None)
+    class OmniTensorLoRARequest(OmniLoRARequest):
+        peft_config: dict = field(default=None)
+        lora_tensors: dict = field(default=None)
+
+else:
+    OmniTensorLoRARequest = TensorLoRARequest
 
 
 class VLLMOmniHijack:
@@ -36,6 +42,9 @@ class VLLMOmniHijack:
 
     @staticmethod
     def hijack():
+        if getattr(DiffusionLoRAManager, "supports_in_memory_lora", False):
+            return
+
         def hijack__load_adapter(self, lora_request: OmniTensorLoRARequest) -> tuple[LoRAModel, PEFTHelper]:
             """
             based on vllm_omni.diffusion.lora.manager.DiffusionLoRAManager._load_adapter,
