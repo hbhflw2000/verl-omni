@@ -687,7 +687,7 @@ class BaseRayDiffusionTrainer(ABC):
         checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
         self.checkpoint_manager = CheckpointEngineManager(
             config=checkpoint_engine_config,
-            trainer=self.actor_rollout_wg,
+            actor_wg=self.actor_rollout_wg,
             replicas=self.llm_server_manager.get_replicas(),
         )
 
@@ -985,8 +985,12 @@ class PolicyGradientRayTrainer(BaseRayDiffusionTrainer):
                 with marked_timer("step", timing_raw):
                     # generate a batch
                     with marked_timer("gen", timing_raw, color="red"):
+                        if curr_step_profile:
+                            self.llm_server_manager.start_profile()
                         gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch_output)
                         self.checkpoint_manager.sleep_replicas()
+                        if curr_step_profile:
+                            self.llm_server_manager.stop_profile()
 
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
@@ -1418,8 +1422,12 @@ class DirectPreferenceRayTrainer(BaseRayDiffusionTrainer):
                         )
 
                         with marked_timer("gen", timing_raw, color="red"):
+                            if curr_step_profile:
+                                self.llm_server_manager.start_profile()
                             gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch_output)
                             self.checkpoint_manager.sleep_replicas()
+                            if curr_step_profile:
+                                self.llm_server_manager.stop_profile()
                             timing_raw.update(gen_batch_output.meta_info["timing"])
                             gen_batch_output.meta_info.pop("timing", None)
 

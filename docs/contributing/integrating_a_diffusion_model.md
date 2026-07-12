@@ -13,6 +13,11 @@ for PPO-like policy-gradient algorithms, and
 [`integrating_a_new_direct_preference_algorithm_for_diffusion_model.md`](integrating_a_new_direct_preference_algorithm_for_diffusion_model.md)
 for direct-preference algorithms.
 
+**If diffusers cannot load your model**, use
+[`integrating_a_non_diffusers_model.md`](integrating_a_non_diffusers_model.md)
+instead. That guide covers the `NonDiffusersModelBase` path using BAGEL-7B-MoT as the
+worked example.
+
 We use the **Qwen-Image** integration
 ([`verl_omni/pipelines/qwen_image_flow_grpo/`](../../verl_omni/pipelines/qwen_image_flow_grpo/__init__.py))
 as the worked example throughout. Read the source alongside this guide — the
@@ -196,7 +201,15 @@ class MyModel(DiffusionModelBase):
                                          scheduler_inputs, step): ...
 ```
 
-### 3.1 `build_scheduler` and `set_timesteps`
+### 3.1 (Optional) `configure_trainable_params`
+
+Override this hook to selectively set ``requires_grad`` for non-LoRA
+full-weight training.  The engine calls it after module build, before
+FSDP wrapping, when ``lora_rank=0``.  When LoRA is enabled this hook
+is **not** called — ``requires_grad`` is managed by the LoRA adapter
+instead.  The default is a no-op (all params trainable).
+
+### 3.2 `build_scheduler` and `set_timesteps`
 
 Reuse
 [`FlowMatchSDEDiscreteScheduler`](../../verl_omni/pipelines/schedulers/flow_match_sde.py)
@@ -207,7 +220,7 @@ Compute `image_seq_len` and `mu` exactly as the upstream diffusers
 pipeline does. If they drift, the training-time noise schedule will not
 match deployment.
 
-### 3.2 `prepare_model_inputs`
+### 3.3 `prepare_model_inputs`
 
 This method receives the **full** batched tensors for the entire
 denoising trajectory (`latents` of shape `(B, T, ...)`, `timesteps` of
@@ -228,7 +241,7 @@ inputs. The typical steps are:
 The dict keys must match the kwargs of the diffusers transformer
 class verbatim — the FSDP engine calls `module(**model_inputs)`.
 
-### 3.3 `forward_and_sample_previous_step`
+### 3.4 `forward_and_sample_previous_step`
 
 Call the transformer once for the positive prompt; if CFG is active,
 call it again for the negative prompt and combine them. Always finish with
@@ -324,7 +337,7 @@ RL exploration starts from a known-good operating point.
 
 Ship a runnable example so users can launch training without trial and
 error. Use
-[`examples/flowgrpo_trainer/run_qwen_image_ocr_lora.sh`](../../examples/flowgrpo_trainer/run_qwen_image_ocr_lora.sh)
+[`examples/flowgrpo_trainer/qwen_image/run_qwen_image_ocr_lora.sh`](../../examples/flowgrpo_trainer/qwen_image/run_qwen_image_ocr_lora.sh)
 and
 [`examples/flowgrpo_trainer/data_process/qwenimage_ocr.py`](../../examples/flowgrpo_trainer/data_process/qwenimage_ocr.py)
 as templates.
@@ -363,7 +376,7 @@ python3 -m verl_omni.trainer.main_diffusion \
     ...  # everything else identical to your diffusers/FSDP2 recipe
 ```
 
-See [`examples/flowgrpo_trainer/run_qwen_image_ocr_veomni.sh`](../../examples/flowgrpo_trainer/run_qwen_image_ocr_veomni.sh) for a complete VeOmni recipe that mirrors [`run_qwen_image_ocr.sh`](../../examples/flowgrpo_trainer/run_qwen_image_ocr.sh) line-for-line — the diff is only the engine-selection fields. Install instructions for VeOmni alongside vLLM 0.20.2 are in [`docs/start/install.md`](../start/install.md#optional-engine-backends).
+See [`examples/flowgrpo_trainer/qwen_image/run_qwen_image_ocr_veomni.sh`](../../examples/flowgrpo_trainer/qwen_image/run_qwen_image_ocr_veomni.sh) for a complete VeOmni recipe that mirrors [`run_qwen_image_ocr.sh`](../../examples/flowgrpo_trainer/qwen_image/run_qwen_image_ocr.sh) line-for-line — the diff is only the engine-selection fields. Install instructions for VeOmni alongside vLLM 0.20.2 are in [`docs/start/install.md`](../start/install.md#optional-engine-backends).
 
 
 #### Mixing override schemas — don't
