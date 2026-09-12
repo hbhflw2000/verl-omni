@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qwen3-Omni input adapter over verl's unchanged Megatron LM engine."""
 
+from copy import copy, deepcopy
+
 from verl.utils.model import extract_multi_modal_inputs
 from verl.workers.engine.base import EngineRegistry
 from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
@@ -20,6 +22,12 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
             raise ValueError("Qwen3-Omni Megatron requires use_remove_padding=false and use_fused_kernels=false.")
         if engine_config.pipeline_model_parallel_size != 1 or engine_config.context_parallel_size != 1:
             raise ValueError("The Qwen3-Omni Megatron input adapter currently requires PP=CP=1.")
+        # Upstream module construction reads text_config.hidden_size even for
+        # policy models. Keep this compatibility view private to the engine;
+        # the worker/rollout retain the original nested Omni configuration.
+        model_config = copy(model_config)
+        model_config.hf_config = deepcopy(model_config.hf_config)
+        model_config.hf_config.text_config = model_config.hf_config.thinker_config.text_config
         super().__init__(model_config, engine_config, optimizer_config, checkpoint_config)
 
     def forward_step(self, batch_iter, model, logits_processor_func, postprocess_micro_batch_func):

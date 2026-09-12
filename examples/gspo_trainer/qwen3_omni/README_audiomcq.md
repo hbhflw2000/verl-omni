@@ -8,6 +8,8 @@ The toy smoke and full-model run share the same configuration and reward.
 inputs and M-RoPE handling at the module-call boundary. It uses BSHD, PP1 and CP1;
 the development audio bridge does not implement packed sequences. Optimizer,
 old-policy snapshots, losses and weight export remain upstream implementations.
+An engine-private config view exposes the nested Thinker text dimensions to
+upstream Megatron helpers without changing the worker/rollout HF configuration.
 
 ## Environment and data
 

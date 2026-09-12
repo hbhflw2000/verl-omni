@@ -138,3 +138,35 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
     assert model.seen["position_ids"] is None
     assert torch.equal(features.grad, torch.ones_like(features))
     assert not model._forward_pre_hooks
+
+
+def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch):
+    from verl_omni.workers.engine import OmniMegatronEngine
+
+    if OmniMegatronEngine is None:
+        pytest.skip("Megatron is an optional dependency in CPU CI")
+    from transformers import Qwen3OmniMoeConfig
+    from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
+
+    model_config = SimpleNamespace(hf_config=Qwen3OmniMoeConfig(), model_stage="thinker")
+    engine_config = SimpleNamespace(
+        use_remove_padding=False,
+        use_fused_kernels=False,
+        pipeline_model_parallel_size=1,
+        context_parallel_size=1,
+    )
+
+    def parent_init(engine, model_config, *_args):
+        engine.model_config = model_config
+
+    monkeypatch.setattr(MegatronEngineWithLMHead, "__init__", parent_init)
+    engine = OmniMegatronEngine(model_config, engine_config, None, None)
+    assert engine.model_config is not model_config
+    assert engine.model_config.hf_config is not model_config.hf_config
+    assert (
+        engine.model_config.hf_config.text_config.hidden_size
+        == model_config.hf_config.thinker_config.text_config.hidden_size
+    )
+    engine.model_config.hf_config.text_config.hidden_size = 128
+    assert not hasattr(model_config.hf_config, "text_config")
+    assert model_config.hf_config.thinker_config.text_config.hidden_size != 128
