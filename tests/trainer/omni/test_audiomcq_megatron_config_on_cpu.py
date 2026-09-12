@@ -36,7 +36,7 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(monkeypatch, tmp_p
     assert config.actor_rollout_ref.model.lora.rank == 0
     assert config.actor_rollout_ref.rollout.engine_kwargs.vllm_omni.limit_mm_per_prompt == {
         "audio": 1,
-        "image": 0,
+        "image": 1,
         "video": 0,
     }
     assert config.trainer.v1.trainer_mode == "omni_separate_async"

@@ -105,10 +105,12 @@ actor_rollout_ref:
         output_mode: ar
         pipeline_name: qwen3_omni_moe
         pipeline_mode: thinker_only
-        # AudioMCQ-specific limits, not a restriction on the shared AR strategy.
+        # Keep vision resident: the pinned vLLM-Omni leaves deepstack buffers
+        # on meta if image=video=0, and audio/text profiling still uses them.
+        # AudioMCQ supplies no images; this is a runtime compatibility setting.
         limit_mm_per_prompt:
           audio: 1
-          image: 0
+          image: 1
           video: 0
     val_kwargs:
       n: 1

@@ -28,6 +28,14 @@ These are external prerequisites, not implementations vendored by this recipe;
 install them into the same environment as verl. Native Transformer Engine and
 FlashAttention extensions must be built for that environment's PyTorch version.
 
+Keep the recipe's `limit_mm_per_prompt.image=1` even for audio-only data. With
+both image and video limits zero, the pinned vLLM-Omni creates vision deepstack
+buffers on `meta` but still consumes them during audio/text profiling. Keeping
+vision resident avoids that device mismatch at the cost of extra inference
+memory. This does not add image samples or unfreeze either tower. The shared
+server's existing frontend multimodal-cache reset must also run after sleep;
+direct `AsyncOmni.sleep()` alone does not cover that server lifecycle.
+
 Download AudioMCQ and its audio assets separately, respecting their licenses.
 Prepare a local `data.jsonl` containing `question`, `choices`, `answer`,
 `audio_path`, and optional `source_dataset`/`id` fields:
