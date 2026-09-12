@@ -76,6 +76,11 @@ only. Random-model correctness and nonzero reward are **not** acceptance gates.
 Inspect finite losses/logprobs, successful optimizer steps, weight transfers,
 and validation completion. A zero gradient is permitted when every reward and
 advantage is zero.
+The toy uses `top_k=1` with positive temperature: unrestricted sampling from its
+tiny random vocabulary can emit input-side audio markers in the response,
+creating fictitious audio segments that cannot be matched to input features.
+This structural-test setting does not change the full-model sampling defaults
+and is not evidence of stochastic sampling quality or a learning curve.
 
 ## Full-model run (32 GPUs)
 
