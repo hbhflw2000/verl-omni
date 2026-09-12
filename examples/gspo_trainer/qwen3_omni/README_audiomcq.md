@@ -81,7 +81,9 @@ advantage is zero.
 
 After allocating four 8-GPU nodes and starting a Ray cluster, run once on the
 head. The defaults request 4 training and 4 standalone rollout GPUs per node,
-actor TP4, rollout TP4, and 150 steps with validation every 10 steps:
+actor TP4/EP4/PP1 (expert TP1), rollout TP4, and 150 steps with validation every
+10 steps. The toy overrides actor TP/EP to one; do not use its unsharded-expert
+topology for the 30B run:
 
 ```bash
 MODEL_PATH=/models/Qwen3-Omni-30B-A3B-Instruct \

@@ -29,6 +29,10 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(monkeypatch, tmp_p
     actor = omega_conf_to_dataclass(config.actor_rollout_ref.actor)
     assert isinstance(actor, McoreActorConfig)
     assert isinstance(actor.engine, McoreEngineConfig)
+    assert actor.engine.tensor_model_parallel_size == 4
+    assert actor.engine.expert_model_parallel_size == 4
+    assert actor.engine.expert_tensor_parallel_size == 1
+    assert actor.engine.pipeline_model_parallel_size == 1
     assert config.actor_rollout_ref.model.model_type == "omni_model"
     assert not config.actor_rollout_ref.model.use_remove_padding
     assert not actor.engine.use_remove_padding

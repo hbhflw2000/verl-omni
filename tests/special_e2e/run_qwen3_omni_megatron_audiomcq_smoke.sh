@@ -16,6 +16,7 @@ bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_audiomcq_separate_
   actor_rollout_ref.rollout.nnodes=1 actor_rollout_ref.rollout.n_gpus_per_node=2 \
   actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
   actor_rollout_ref.actor.megatron.tensor_model_parallel_size=1 \
+  actor_rollout_ref.actor.megatron.expert_model_parallel_size=1 \
   actor_rollout_ref.actor.megatron.sequence_parallel=false \
   +actor_rollout_ref.actor.megatron.override_transformer_config.gradient_accumulation_fusion=false \
   actor_rollout_ref.actor.megatron.param_offload=false \

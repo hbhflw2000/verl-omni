@@ -59,7 +59,8 @@ actor_rollout_ref:
       tensor_model_parallel_size: 4
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
-      expert_model_parallel_size: 1
+      # Shard the full 30B expert weights; EP1/ETP1 replicates them per rank.
+      expert_model_parallel_size: 4
       expert_tensor_parallel_size: 1
       sequence_parallel: true
       param_offload: true
