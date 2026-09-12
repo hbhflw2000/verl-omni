@@ -36,6 +36,15 @@ These are external prerequisites, not implementations vendored by this recipe;
 install them into the same environment as verl. Native Transformer Engine and
 FlashAttention extensions must be built for that environment's PyTorch version.
 
+The pinned verl also needs the position-ID layout repair proposed in
+[verl #7767](https://github.com/verl-project/verl/pull/7767), head `a965a838`.
+It was closed without merging. TransferQueue 0.1.8 can pack equal-length
+`[4, sequence_length]` position IDs along the coordinate axis; the old verl
+helper then changes only `_ragged_idx`, making values/offsets inconsistent.
+This can fail the second async training batch even without TensorDict
+consolidation. Keep this fix in the dependency and report the TQ reproduction
+upstream; do not duplicate it in the Omni trainer or treat it as already merged.
+
 Keep the recipe's `limit_mm_per_prompt.image=1` even for audio-only data. With
 both image and video limits zero, the pinned vLLM-Omni creates vision deepstack
 buffers on `meta` but still consumes them during audio/text profiling. Keeping
