@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Catch FSDP dispatch and stale V0 config keys before allocating Megatron GPUs."""
 
+import inspect
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -68,6 +69,38 @@ def test_megatron_detach_preserves_shard_list_protocol():
     save.assert_called_once_with(modules)
     restore.assert_called_once_with(modules, snapshots)
     assert not worker.cpu_saved_models
+
+
+def test_megatron_worker_initialization_selects_ppo_loss(monkeypatch):
+    import verl_omni.workers.engine_workers as workers
+
+    with initialize_config_dir(version_base=None, config_dir=str(CONFIG)):
+        config = compose(config_name="audiomcq_megatron_separate_async")
+    worker = object.__new__(workers.ActorRolloutRefWorker)
+    worker.config = config.actor_rollout_ref
+    worker.role = "actor"
+    worker.distillation_enabled = False
+    model_config = OmegaConf.create({"model_type": "omni_model", "use_remove_padding": False})
+    original_convert = workers.omega_conf_to_dataclass
+    monkeypatch.setattr(
+        workers,
+        "omega_conf_to_dataclass",
+        lambda value: model_config if value is worker.config.model else original_convert(value),
+    )
+
+    class EngineBoundaryReached(Exception):
+        pass
+
+    def build_engine(config):
+        assert isinstance(config.engine_config, McoreEngineConfig)
+        assert config.model_type == "omni_model"
+        raise EngineBoundaryReached
+
+    monkeypatch.setattr(workers, "TrainingWorker", build_engine)
+    with pytest.raises(EngineBoundaryReached):
+        inspect.unwrap(workers.ActorRolloutRefWorker.init_model)(worker)
+    assert worker.loss_fn.func is workers.ppo_loss
+    assert model_config.trainer_type == "policy_gradient"
 
 
 def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
