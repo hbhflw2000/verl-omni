@@ -24,6 +24,7 @@ bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_audiomcq_separate_
   data.train_batch_size=4 actor_rollout_ref.actor.ppo_mini_batch_size=2 \
   trainer.v1.separate_async.parameter_sync_step=2 \
   actor_rollout_ref.rollout.n=2 actor_rollout_ref.rollout.max_num_seqs=4 \
+  actor_rollout_ref.rollout.max_num_batched_tokens=1024 \
   actor_rollout_ref.rollout.agent.num_workers=2 reward.num_workers=1 \
   data.dataloader_num_workers=0 actor_rollout_ref.rollout.gpu_memory_utilization=0.2 \
   actor_rollout_ref.rollout.enforce_eager=true \
