@@ -24,6 +24,14 @@ With Transformers 5.13+, also apply the registration fix from upstream
 [Megatron-Bridge #4876](https://github.com/NVIDIA-NeMo/Megatron-Bridge/commit/039156328f9587ccb5a9c8c9e6adf30e63f2cf6a)
 to that older bridge revision; otherwise native ASR auto-registration collides
 while importing the bridge, before any Omni model is initialized.
+The same older bridge also calls an encoder method named
+`_get_feat_extract_output_lengths` when trimming audio features. Transformers 5
+moved it to the modeling module and changed its return value from a tuple to
+output lengths. The bridge must support that API (including the encoder's
+`n_window`) before training; successful checkpoint loading alone does not test
+this path. Keep this dependency fix in the bridge, not a global runtime patch
+in verl-omni. A tested bridge revision with both compatibility fixes is required
+before publishing the recipe as reproducible with Transformers 5.
 These are external prerequisites, not implementations vendored by this recipe;
 install them into the same environment as verl. Native Transformer Engine and
 FlashAttention extensions must be built for that environment's PyTorch version.
