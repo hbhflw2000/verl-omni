@@ -67,6 +67,10 @@ actor_rollout_ref:
       optimizer_offload: true
       grad_offload: true
       override_transformer_config:
+        # The local MCore path requires the optional APEX wgrad extension for
+        # this fusion.  Keep the public recipe runnable in environments where
+        # that extension is absent; this changes performance, not semantics.
+        gradient_accumulation_fusion: false
         freeze_language_model: false
         freeze_vision_model: true
         freeze_audio_model: true
@@ -77,6 +81,9 @@ actor_rollout_ref:
   ref:
     strategy: megatron
     log_prob_micro_batch_size_per_gpu: 1
+    megatron:
+      override_transformer_config:
+        gradient_accumulation_fusion: false
   rollout:
     name: vllm_omni
     mode: async

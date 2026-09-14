@@ -33,6 +33,10 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(monkeypatch, tmp_p
     assert actor.engine.expert_model_parallel_size == 4
     assert actor.engine.expert_tensor_parallel_size == 1
     assert actor.engine.pipeline_model_parallel_size == 1
+    assert actor.engine.override_transformer_config["gradient_accumulation_fusion"] is False
+    assert (
+        config.actor_rollout_ref.ref.megatron.override_transformer_config.gradient_accumulation_fusion is False
+    )
     assert config.actor_rollout_ref.model.model_type == "omni_model"
     assert not config.actor_rollout_ref.model.use_remove_padding
     assert not actor.engine.use_remove_padding
