@@ -57,7 +57,7 @@ def _ground_truth_fields(ground_truth: Any) -> tuple[str, list[str], list[int]]:
 
 def compute_score(solution_str: str, ground_truth: Any, **kwargs) -> dict[str, float]:
     """Score an AudioMCQ response using exact answer text or an exact choice label."""
-    answer, choices, correct_choice_indices = _ground_truth_fields(ground_truth)
+    answer, _, correct_choice_indices = _ground_truth_fields(ground_truth)
     matches = _ANSWER_PATTERN.findall(solution_str)
     if not matches:
         return {"score": 0.0, "content_correct": 0.0, "format_valid": 0.0}
@@ -73,12 +73,6 @@ def compute_score(solution_str: str, ground_truth: Any, **kwargs) -> dict[str, f
     labels = [chr(ord("a") + index) for index in correct_choice_indices]
     label_forms = {form for label in labels for form in (label, f"{label})", f"({label})")}
     content_correct = predicted == normalized_answer or predicted in label_forms
-
-    # Exact matching intentionally rejects answers that parrot all choices or
-    # merely contain the correct choice as a substring.
-    if predicted != normalized_answer and predicted not in label_forms:
-        normalized_choices = {_normalize_answer(choice) for choice in choices}
-        content_correct = predicted in normalized_choices and predicted == normalized_answer
 
     return {
         "score": float(content_correct),

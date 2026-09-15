@@ -47,6 +47,28 @@ This can fail the second async training batch even without TensorDict
 consolidation. Keep this fix in the dependency and report the TQ reproduction
 upstream; do not duplicate it in the Omni trainer or treat it as already merged.
 
+### Merge prerequisites
+
+This full-model recipe is not reproducible from the repository pins yet. The
+following dependency work must land before this PR can be treated as runnable
+from a clean checkout:
+
+1. `verl-project/verl` must replace its `megatron-bridge==0.5.2` and paired
+   Megatron-Core pins with a tested upstream pair that supports Qwen3-Omni
+   Thinker conversion, audio forward/export, Transformers 5 registration, and
+   the current audio-length API. Then this repository must bump
+   `.github/verl_pin.txt` to that verl revision.
+2. A replacement for the closed verl #7767 must land in `verl`, with regression
+   coverage for equal-length multimodal position IDs, followed by the same verl
+   pin bump here.
+
+The 150-step acceptance run used the development dependency overrides described
+above; it validates this integration path but is not evidence that the public
+pins already satisfy these prerequisites. The tiny-random smoke validates
+audio transport, optimizer steps, and weight synchronization only. It does not
+exercise the full-model TransferQueue position-ID failure and must not be used
+as evidence that the dependency issue is fixed.
+
 Keep the recipe's `limit_mm_per_prompt.image=1` even for audio-only data. With
 both image and video limits zero, the pinned vLLM-Omni creates vision deepstack
 buffers on `meta` but still consumes them during audio/text profiling. Keeping

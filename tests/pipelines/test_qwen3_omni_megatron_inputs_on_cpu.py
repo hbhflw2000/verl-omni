@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pin the actual module-call audio boundary without requiring Megatron in CPU CI."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from verl.utils.model import extract_multi_modal_inputs
@@ -30,6 +32,53 @@ def test_audio_reaches_model_and_autograd_while_vision_is_preserved():
     assert model.seen["audio_feature_lengths"] is lengths
     assert model.seen["pixel_values"] is image
     assert model.seen["position_ids"] is None
+    assert torch.equal(features.grad, torch.ones_like(features))
+    assert not model._forward_pre_hooks
+
+
+def test_audio_hook_wraps_the_pinned_mcore_bshd_forward(monkeypatch):
+    model_forward = pytest.importorskip("verl.models.mcore.model_forward")
+    mcore_util = pytest.importorskip("verl.models.mcore.util")
+    monkeypatch.setattr(mcore_util.mpu, "get_context_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(mcore_util.mpu, "get_context_parallel_rank", lambda: 0)
+    monkeypatch.setattr(mcore_util.mpu, "get_tensor_model_parallel_world_size", lambda: 1)
+
+    class MCoreRecordingModel(RecordingModel):
+        pre_process = True
+        post_process = False
+        config = SimpleNamespace(fp8=None)
+
+    model = MCoreRecordingModel()
+    input_ids = torch.nested.nested_tensor(
+        [torch.tensor([1, 2, 3]), torch.tensor([4, 5])],
+        layout=torch.jagged,
+    )
+    features = torch.randn(2, 128, 5, requires_grad=True)
+    feature_mask = torch.ones(2, 5, dtype=torch.long)
+    image = torch.randn(2, 3)
+    inputs = {
+        "input_features": features,
+        "feature_attention_mask": feature_mask,
+        "audio_feature_lengths": feature_mask.sum(-1),
+        "pixel_values": image,
+    }
+
+    with qwen3_omni_megatron_inputs(model, inputs):
+        output = model_forward.gptmodel_forward_model_engine(
+            model=model,
+            input_ids=input_ids,
+            multi_modal_inputs=inputs,
+            data_format="bshd",
+        )
+    output.backward()
+
+    assert model.seen["input_ids"].shape == (2, 3)
+    assert "packed_seq_params" not in model.seen
+    assert model.seen["position_ids"] is None
+    assert model.seen["input_features"] is features
+    assert model.seen["feature_attention_mask"] is feature_mask
+    assert model.seen["audio_feature_lengths"] is inputs["audio_feature_lengths"]
+    assert model.seen["pixel_values"] is image
     assert torch.equal(features.grad, torch.ones_like(features))
     assert not model._forward_pre_hooks
 

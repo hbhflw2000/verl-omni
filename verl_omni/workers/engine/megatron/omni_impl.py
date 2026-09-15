@@ -11,7 +11,7 @@ from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHe
 from verl_omni.pipelines.qwen3_omni.megatron_inputs import qwen3_omni_megatron_inputs
 
 
-@EngineRegistry.register(model_type="omni_model", backend="megatron", device="cuda")
+@EngineRegistry.register(model_type="omni_model", backend="megatron")
 class OmniMegatronEngine(MegatronEngineWithLMHead):
     """Train the Qwen3-Omni Thinker using BSHD and the upstream V1 engine."""
 
