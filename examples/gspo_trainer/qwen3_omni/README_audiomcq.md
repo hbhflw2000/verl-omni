@@ -3,7 +3,9 @@
 This recipe trains all Thinker language-model parameters (LoRA rank zero),
 freezes the vision/audio towers, and generates text conditioned on audio with
 standalone vLLM-Omni replicas. It uses `trainer.v1.trainer_mode=omni_separate_async`.
-The toy smoke and full-model run share the same configuration and reward.
+The toy smoke and full-model run both select the shared
+`verl_omni/trainer/config/omni_megatron_trainer.yaml`; the public launcher adds
+only the AudioMCQ recipe overrides, and the toy adds its small-model overrides.
 `OmniMegatronEngine` reuses verl's Megatron LM engine and adds model-scoped audio
 inputs and M-RoPE handling at the module-call boundary. It uses BSHD, PP1 and CP1;
 the development audio bridge does not implement packed sequences. Optimizer,

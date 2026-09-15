@@ -3,6 +3,8 @@
 """Catch FSDP dispatch and stale V0 config keys before allocating Megatron GPUs."""
 
 import inspect
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -10,7 +12,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 import torch
-from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 from verl.utils.config import omega_conf_to_dataclass
 from verl.workers.config import McoreActorConfig, McoreEngineConfig
@@ -18,14 +19,34 @@ from verl.workers.config import McoreActorConfig, McoreEngineConfig
 from verl_omni.trainer.omni.ray_omni_trainer_separate_async import OmniPPOTrainerSeparateAsync
 from verl_omni.workers.omni_engine_workers import OmniDetachActorWorker
 
-CONFIG = Path(__file__).parents[3] / "examples/gspo_trainer/qwen3_omni/config"
+REPO_ROOT = Path(__file__).parents[3]
+LAUNCHER = REPO_ROOT / "examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_audiomcq_separate_async.sh"
 
 
-def test_public_recipe_selects_megatron_and_v1_separate_async(monkeypatch, tmp_path):
-    tb_dir = str(tmp_path / "tensorboard")
-    monkeypatch.setenv("TENSORBOARD_DIR", tb_dir)
-    with initialize_config_dir(version_base=None, config_dir=str(CONFIG)):
-        config = compose(config_name="audiomcq_megatron_separate_async")
+@pytest.fixture(scope="module")
+def public_recipe_config(tmp_path_factory):
+    output_dir = tmp_path_factory.mktemp("audiomcq-config") / "artifacts"
+    env = os.environ.copy()
+    env.update(
+        {
+            "AUDIO_MCQ_CONFIG_ONLY": "1",
+            "MODEL_PATH": "/tmp/model",
+            "OUTPUT_DIR": str(output_dir),
+            "PYTHON": sys.executable,
+            "TRAIN_FILE": "/tmp/train.parquet",
+            "VAL_FILE": "/tmp/validation.parquet",
+        }
+    )
+    subprocess.run(["bash", str(LAUNCHER)], cwd=REPO_ROOT, env=env, check=True, timeout=60)
+    [config_path] = output_dir.glob("run.*/config.yaml")
+    return config_path
+
+
+def test_public_recipe_selects_megatron_and_v1_separate_async(public_recipe_config):
+    config = OmegaConf.load(public_recipe_config)
+    command = (public_recipe_config.parent / "command.txt").read_text()
+    assert "--config-name omni_megatron_trainer" in command
+    assert "audiomcq_megatron_separate_async" not in command
     actor = omega_conf_to_dataclass(config.actor_rollout_ref.actor)
     assert isinstance(actor, McoreActorConfig)
     assert isinstance(actor.engine, McoreEngineConfig)
@@ -33,7 +54,11 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(monkeypatch, tmp_p
     assert actor.engine.expert_model_parallel_size == 4
     assert actor.engine.expert_tensor_parallel_size == 1
     assert actor.engine.pipeline_model_parallel_size == 1
-    assert actor.engine.override_transformer_config["gradient_accumulation_fusion"] is False
+    transformer_config = actor.engine.override_transformer_config
+    assert transformer_config["gradient_accumulation_fusion"] is False
+    assert transformer_config["freeze_language_model"] is False
+    assert transformer_config["freeze_vision_model"] is True
+    assert transformer_config["freeze_audio_model"] is True
     assert (
         config.actor_rollout_ref.ref.megatron.override_transformer_config.gradient_accumulation_fusion is False
     )
@@ -47,13 +72,23 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(monkeypatch, tmp_p
         "image": 1,
         "video": 0,
     }
+    assert config.actor_rollout_ref.rollout.nnodes == 4
+    assert config.actor_rollout_ref.rollout.n_gpus_per_node == 4
+    assert config.actor_rollout_ref.rollout.tensor_model_parallel_size == 4
+    assert config.actor_rollout_ref.rollout.n == 8
     assert config.trainer.v1.trainer_mode == "omni_separate_async"
+    assert config.trainer.nnodes == 4
+    assert config.trainer.n_gpus_per_node == 4
+    assert config.trainer.total_training_steps == 150
+    assert config.trainer.test_freq == 10
+    assert config.reward.custom_reward_function.path == "pkg://verl_omni.utils.reward_score.audio_mcq"
+    assert config.reward.custom_reward_function.name == "compute_score"
     trainer = OmniPPOTrainerSeparateAsync(config)
     assert trainer.parameter_sync_step == 1
     assert config.data.train_batch_size == trainer.parameter_sync_step * actor.ppo_mini_batch_size
     assert not config.algorithm.rollout_correction.bypass_mode
     env = OmegaConf.to_container(config.ray_kwargs.ray_init.runtime_env.env_vars, resolve=True)
-    assert env["TENSORBOARD_DIR"] == tb_dir
+    assert env["TENSORBOARD_DIR"] == str(public_recipe_config.parent / "tensorboard")
     assert env["VERL_USE_EXTERNAL_MODULES"] == "verl_omni"
     assert all(isinstance(value, str) for value in env.values())
 
@@ -79,11 +114,10 @@ def test_megatron_detach_preserves_shard_list_protocol():
     assert not worker.cpu_saved_models
 
 
-def test_megatron_worker_initialization_selects_ppo_loss(monkeypatch):
+def test_megatron_worker_initialization_selects_ppo_loss(monkeypatch, public_recipe_config):
     import verl_omni.workers.engine_workers as workers
 
-    with initialize_config_dir(version_base=None, config_dir=str(CONFIG)):
-        config = compose(config_name="audiomcq_megatron_separate_async")
+    config = OmegaConf.load(public_recipe_config)
     worker = object.__new__(workers.ActorRolloutRefWorker)
     worker.config = config.actor_rollout_ref
     worker.role = "actor"
