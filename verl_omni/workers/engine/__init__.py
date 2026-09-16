@@ -39,5 +39,7 @@ __all__ = [
     "DiffusersFSDPEngine",
     "VeOmniDiffusionEngine",
     "OmniFSDPEngine",
-    "OmniMegatronEngine",
 ]
+
+if OmniMegatronEngine is not None:
+    __all__.append("OmniMegatronEngine")

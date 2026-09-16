@@ -59,9 +59,7 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(public_recipe_conf
     assert transformer_config["freeze_language_model"] is False
     assert transformer_config["freeze_vision_model"] is True
     assert transformer_config["freeze_audio_model"] is True
-    assert (
-        config.actor_rollout_ref.ref.megatron.override_transformer_config.gradient_accumulation_fusion is False
-    )
+    assert config.actor_rollout_ref.ref.megatron.override_transformer_config.gradient_accumulation_fusion is False
     assert config.actor_rollout_ref.model.model_type == "omni_model"
     assert not config.actor_rollout_ref.model.use_remove_padding
     assert not actor.engine.use_remove_padding
