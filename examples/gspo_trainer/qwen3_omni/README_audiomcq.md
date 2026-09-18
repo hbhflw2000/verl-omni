@@ -8,8 +8,10 @@ The toy smoke and full-model run both select the shared
 only the AudioMCQ recipe overrides, and the toy adds its small-model overrides.
 `OmniMegatronEngine` reuses verl's Megatron LM engine and adds model-scoped audio
 inputs and M-RoPE handling at the module-call boundary. It uses BSHD, PP1 and CP1;
-the development audio bridge does not implement packed sequences. Optimizer,
-old-policy snapshots, losses and weight export remain upstream implementations.
+the development audio bridge does not implement packed sequences, dynamic
+micro-batching is disabled, and MTP is rejected because the Thinker constructs
+its own M-RoPE. Optimizer, old-policy snapshots, losses and weight export remain
+upstream implementations.
 An engine-private config view exposes the nested Thinker text dimensions to
 upstream Megatron helpers without changing the worker/rollout HF configuration.
 
@@ -38,14 +40,15 @@ These are external prerequisites, not implementations vendored by this recipe;
 install them into the same environment as verl. Native Transformer Engine and
 FlashAttention extensions must be built for that environment's PyTorch version.
 
-The pinned verl also needs the position-ID layout repair proposed in
+The full-model TransferQueue path also needs the equal-length 3D position-ID
+layout repair tracked by [verl #7901](https://github.com/verl-project/verl/pull/7901).
+The development run used the implementation from closed
 [verl #7767](https://github.com/verl-project/verl/pull/7767), head `a965a838`.
-It was closed without merging. TransferQueue 0.1.8 can pack equal-length
-`[4, sequence_length]` position IDs along the coordinate axis; the old verl
-helper then changes only `_ragged_idx`, making values/offsets inconsistent.
-This can fail the second async training batch even without TensorDict
-consolidation. Keep this fix in the dependency and report the TQ reproduction
-upstream; do not duplicate it in the Omni trainer or treat it as already merged.
+TransferQueue 0.1.8 can carry `[4, sequence_length]` position IDs whose jagged
+layout is inconsistent; the old verl helper changes only `_ragged_idx` without
+rebuilding values and offsets. This can fail before the model forward even
+though the Thinker ultimately constructs its own M-RoPE. Keep the repair in
+verl rather than duplicating it in the Omni trainer.
 
 ### Merge prerequisites
 
@@ -58,9 +61,9 @@ from a clean checkout:
    Thinker conversion, audio forward/export, Transformers 5 registration, and
    the current audio-length API. Then this repository must bump
    `.github/verl_pin.txt` to that verl revision.
-2. A replacement for the closed verl #7767 must land in `verl`, with regression
-   coverage for equal-length multimodal position IDs, followed by the same verl
-   pin bump here.
+2. verl #7901, or an equivalent replacement for closed verl #7767, must land
+   with regression coverage for equal-length multimodal position IDs, followed
+   by the same verl pin bump here.
 
 The 150-step acceptance run used the development dependency overrides described
 above; it validates this integration path but is not evidence that the public

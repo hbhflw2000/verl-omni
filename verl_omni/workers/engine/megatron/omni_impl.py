@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qwen3-Omni input adapter over verl's unchanged Megatron LM engine."""
 
+from contextlib import ExitStack
 from copy import copy, deepcopy
 
-from verl.utils.model import extract_multi_modal_inputs
 from verl.workers.engine.base import EngineRegistry
 from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
 
@@ -18,6 +18,8 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
     def __init__(self, model_config, engine_config, optimizer_config, checkpoint_config):
         if model_config.hf_config.model_type != "qwen3_omni_moe" or model_config.model_stage != "thinker":
             raise ValueError("The Omni Megatron engine currently supports Qwen3-Omni Thinker only.")
+        if getattr(getattr(model_config, "mtp", None), "enable", False):
+            raise ValueError("Qwen3-Omni Megatron does not support MTP because the Thinker constructs M-RoPE.")
         if engine_config.use_remove_padding or engine_config.use_fused_kernels:
             raise ValueError("Qwen3-Omni Megatron requires use_remove_padding=false and use_fused_kernels=false.")
         if engine_config.pipeline_model_parallel_size != 1 or engine_config.context_parallel_size != 1:
@@ -31,7 +33,20 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
         super().__init__(model_config, engine_config, optimizer_config, checkpoint_config)
 
     def forward_step(self, batch_iter, model, logits_processor_func, postprocess_micro_batch_func):
-        batch = next(batch_iter)
-        multi_modal_inputs = extract_multi_modal_inputs(batch.get("multi_modal_inputs", []))
-        with qwen3_omni_megatron_inputs(model, multi_modal_inputs):
-            return super().forward_step(iter([batch]), model, logits_processor_func, postprocess_micro_batch_func)
+        with ExitStack() as input_adapters:
+            self._forward_model = model
+            self._input_adapters = input_adapters
+            try:
+                return super().forward_step(batch_iter, model, logits_processor_func, postprocess_micro_batch_func)
+            finally:
+                del self._input_adapters
+                del self._forward_model
+
+    def prepare_model_inputs(self, batch):
+        model_inputs = super().prepare_model_inputs(batch)
+        if not hasattr(self, "_forward_model") or not hasattr(self, "_input_adapters"):
+            raise RuntimeError("Qwen3-Omni model inputs must be prepared inside forward_step.")
+        self._input_adapters.enter_context(
+            qwen3_omni_megatron_inputs(self._forward_model, model_inputs["multi_modal_inputs"])
+        )
+        return model_inputs

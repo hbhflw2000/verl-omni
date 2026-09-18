@@ -14,6 +14,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 from verl.utils.config import omega_conf_to_dataclass
+from verl.utils.model import extract_multi_modal_inputs
 from verl.workers.config import McoreActorConfig, McoreEngineConfig
 
 from verl_omni.trainer.omni.ray_omni_trainer_separate_async import OmniPPOTrainerSeparateAsync
@@ -63,6 +64,9 @@ def test_public_recipe_selects_megatron_and_v1_separate_async(public_recipe_conf
     assert config.actor_rollout_ref.model.model_type == "omni_model"
     assert not config.actor_rollout_ref.model.use_remove_padding
     assert not actor.engine.use_remove_padding
+    assert not actor.use_dynamic_bsz
+    assert not config.actor_rollout_ref.ref.log_prob_use_dynamic_bsz
+    assert not config.actor_rollout_ref.rollout.log_prob_use_dynamic_bsz
     assert config.actor_rollout_ref.model.lora_rank == 0
     assert config.actor_rollout_ref.model.lora.rank == 0
     assert config.actor_rollout_ref.rollout.engine_kwargs.vllm_omni.limit_mm_per_prompt == {
@@ -165,19 +169,65 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
     features = torch.ones(1, 128, 5, requires_grad=True)
     batch = {"multi_modal_inputs": [{"input_features": features}]}
     batches = []
+    events = []
+
+    def upstream_prepare(_engine, batch):
+        assert events == ["batch moved"]
+        events.append("inputs prepared")
+        return {"multi_modal_inputs": extract_multi_modal_inputs(batch["multi_modal_inputs"])}
 
     def upstream_forward(_engine, batch_iter, model, *_args):
-        batches.append(next(batch_iter))
+        batch = next(batch_iter)
+        batches.append(batch)
+        events.append("batch moved")
+        _engine.prepare_model_inputs(batch)
+        if getattr(_engine, "fail_after_prepare", False):
+            raise RuntimeError("forward failed after input preparation")
+        events.append("model called")
         return model(input_ids=torch.ones(1, 4, dtype=torch.long), position_ids=torch.arange(4))
 
+    monkeypatch.setattr(MegatronEngineWithLMHead, "prepare_model_inputs", upstream_prepare)
     monkeypatch.setattr(MegatronEngineWithLMHead, "forward_step", upstream_forward)
     model = Model()
     engine = object.__new__(OmniMegatronEngine)
     engine.forward_step(iter([batch]), model, None, None).backward()
     assert batches == [batch]
+    assert events == ["batch moved", "inputs prepared", "model called"]
     assert model.seen["position_ids"] is None
     assert torch.equal(features.grad, torch.ones_like(features))
     assert not model._forward_pre_hooks
+    assert not hasattr(engine, "_forward_model")
+    assert not hasattr(engine, "_input_adapters")
+
+    events.clear()
+    engine.fail_after_prepare = True
+    with pytest.raises(RuntimeError, match="forward failed"):
+        engine.forward_step(iter([batch]), model, None, None)
+    assert events == ["batch moved", "inputs prepared"]
+    assert not model._forward_pre_hooks
+    assert not hasattr(engine, "_forward_model")
+    assert not hasattr(engine, "_input_adapters")
+
+
+def test_native_megatron_adapter_rejects_mtp():
+    from verl_omni.workers.engine import OmniMegatronEngine
+
+    if OmniMegatronEngine is None:
+        pytest.skip("Megatron is an optional dependency in CPU CI")
+    from transformers import Qwen3OmniMoeConfig
+
+    model_config = SimpleNamespace(
+        hf_config=Qwen3OmniMoeConfig(), model_stage="thinker", mtp=SimpleNamespace(enable=True)
+    )
+    engine_config = SimpleNamespace(
+        use_remove_padding=False,
+        use_fused_kernels=False,
+        pipeline_model_parallel_size=1,
+        context_parallel_size=1,
+    )
+
+    with pytest.raises(ValueError, match="does not support MTP"):
+        OmniMegatronEngine(model_config, engine_config, None, None)
 
 
 def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch):
