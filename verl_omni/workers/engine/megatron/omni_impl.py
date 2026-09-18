@@ -30,6 +30,8 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
         model_config = copy(model_config)
         model_config.hf_config = deepcopy(model_config.hf_config)
         model_config.hf_config.text_config = model_config.hf_config.thinker_config.text_config
+        self._forward_model = None
+        self._input_adapters = None
         super().__init__(model_config, engine_config, optimizer_config, checkpoint_config)
 
     def forward_step(self, batch_iter, model, logits_processor_func, postprocess_micro_batch_func):
@@ -39,12 +41,12 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
             try:
                 return super().forward_step(batch_iter, model, logits_processor_func, postprocess_micro_batch_func)
             finally:
-                del self._input_adapters
-                del self._forward_model
+                self._input_adapters = None
+                self._forward_model = None
 
     def prepare_model_inputs(self, batch):
         model_inputs = super().prepare_model_inputs(batch)
-        if not hasattr(self, "_forward_model") or not hasattr(self, "_input_adapters"):
+        if self._forward_model is None or self._input_adapters is None:
             raise RuntimeError("Qwen3-Omni model inputs must be prepared inside forward_step.")
         self._input_adapters.enter_context(
             qwen3_omni_megatron_inputs(self._forward_model, model_inputs["multi_modal_inputs"])

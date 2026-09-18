@@ -196,8 +196,8 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
     assert model.seen["position_ids"] is None
     assert torch.equal(features.grad, torch.ones_like(features))
     assert not model._forward_pre_hooks
-    assert not hasattr(engine, "_forward_model")
-    assert not hasattr(engine, "_input_adapters")
+    assert engine._forward_model is None
+    assert engine._input_adapters is None
 
     events.clear()
     engine.fail_after_prepare = True
@@ -205,8 +205,8 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
         engine.forward_step(iter([batch]), model, None, None)
     assert events == ["batch moved", "inputs prepared"]
     assert not model._forward_pre_hooks
-    assert not hasattr(engine, "_forward_model")
-    assert not hasattr(engine, "_input_adapters")
+    assert engine._forward_model is None
+    assert engine._input_adapters is None
 
 
 def test_native_megatron_adapter_rejects_mtp():
@@ -251,6 +251,8 @@ def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch)
 
     monkeypatch.setattr(MegatronEngineWithLMHead, "__init__", parent_init)
     engine = OmniMegatronEngine(model_config, engine_config, None, None)
+    assert engine._forward_model is None
+    assert engine._input_adapters is None
     assert engine.model_config is not model_config
     assert engine.model_config.hf_config is not model_config.hf_config
     assert (
