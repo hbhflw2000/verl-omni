@@ -6,11 +6,12 @@ standalone vLLM-Omni replicas. It uses `trainer.v1.trainer_mode=omni_separate_as
 The toy smoke and full-model run both select the shared
 `verl_omni/trainer/config/omni_megatron_trainer.yaml`; the public launcher adds
 only the AudioMCQ recipe overrides, and the toy adds its small-model overrides.
-`OmniMegatronEngine` reuses verl's Megatron LM engine and adds model-scoped audio
-inputs and M-RoPE handling at the module-call boundary. It uses BSHD, PP1 and CP1;
+`OmniMegatronEngine` follows verl's Megatron LM forward flow with an explicit
+BSHD model call that passes audio tensors and lets the Thinker build M-RoPE.
+It uses BSHD, PP1 and CP1;
 the development audio bridge does not implement packed sequences, dynamic
-micro-batching is disabled, and MTP is rejected because the Thinker constructs
-its own M-RoPE. Optimizer, old-policy snapshots, losses and weight export remain
+micro-batching is disabled, and MTP, dynamic CP and router replay are rejected.
+Optimizer, old-policy snapshots, losses and weight export remain
 upstream implementations.
 An engine-private config view exposes the nested Thinker text dimensions to
 upstream Megatron helpers without changing the worker/rollout HF configuration.

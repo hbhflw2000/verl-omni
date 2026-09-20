@@ -14,7 +14,6 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 from verl.utils.config import omega_conf_to_dataclass
-from verl.utils.model import extract_multi_modal_inputs
 from verl.workers.config import McoreActorConfig, McoreEngineConfig
 
 from verl_omni.trainer.omni.ray_omni_trainer_separate_async import OmniPPOTrainerSeparateAsync
@@ -152,52 +151,70 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
 
     if OmniMegatronEngine is None:
         pytest.skip("Megatron is an optional dependency in CPU CI")
+    from verl.models.mcore import util as mcore_util
     from verl.workers.engine.base import EngineRegistry
     from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
 
+    from verl_omni.workers.engine.megatron import omni_impl
+
     monkeypatch.setenv("VERL_ENGINE_DEVICE", "cuda")
+    monkeypatch.setattr(omni_impl, "get_device_id", lambda: "cpu")
+    monkeypatch.setattr(mcore_util.mpu, "get_context_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(mcore_util.mpu, "get_context_parallel_rank", lambda: 0)
+    monkeypatch.setattr(mcore_util.mpu, "get_tensor_model_parallel_world_size", lambda: 1)
     assert EngineRegistry.get_engine_cls("omni_model", "megatron") is OmniMegatronEngine
     assert issubclass(OmniMegatronEngine, MegatronEngineWithLMHead)
     assert OmniMegatronEngine.optimizer_step is MegatronEngineWithLMHead.optimizer_step
     assert OmniMegatronEngine.get_per_tensor_param is MegatronEngineWithLMHead.get_per_tensor_param
 
     class Model(torch.nn.Module):
+        pre_process = True
+        post_process = False
+        config = SimpleNamespace(fp8=None)
+
         def forward(self, **kwargs):
             self.seen = kwargs
             return kwargs["input_features"].sum()
 
     features = torch.ones(1, 128, 5, requires_grad=True)
-    batch = {"multi_modal_inputs": [{"input_features": features}]}
-    batches = []
+    ids = torch.nested.nested_tensor([torch.tensor([1, 2, 3, 4])], layout=torch.jagged)
+    loss_mask = torch.nested.nested_tensor([torch.ones(4, dtype=torch.bool)], layout=torch.jagged)
     events = []
+
+    class Batch(dict):
+        def to(self, device):
+            assert device == "cpu"
+            events.append("batch moved")
+            return self
+
+    batch = Batch(input_ids=ids, loss_mask=loss_mask, temperature=torch.tensor([1.0]))
 
     def upstream_prepare(_engine, batch):
         assert events == ["batch moved"]
         events.append("inputs prepared")
-        return {"multi_modal_inputs": extract_multi_modal_inputs(batch["multi_modal_inputs"])}
-
-    def upstream_forward(_engine, batch_iter, model, *_args):
-        batch = next(batch_iter)
-        batches.append(batch)
-        events.append("batch moved")
-        _engine.prepare_model_inputs(batch)
         if getattr(_engine, "fail_after_prepare", False):
             raise RuntimeError("forward failed after input preparation")
-        events.append("model called")
-        return model(input_ids=torch.ones(1, 4, dtype=torch.long), position_ids=torch.arange(4))
+        return {
+            "input_ids": batch["input_ids"],
+            "attention_mask": None,
+            "loss_mask": batch["loss_mask"],
+            "multi_modal_inputs": {"input_features": features},
+        }
 
     monkeypatch.setattr(MegatronEngineWithLMHead, "prepare_model_inputs", upstream_prepare)
-    monkeypatch.setattr(MegatronEngineWithLMHead, "forward_step", upstream_forward)
     model = Model()
     engine = object.__new__(OmniMegatronEngine)
-    engine.forward_step(iter([batch]), model, None, None).backward()
-    assert batches == [batch]
-    assert events == ["batch moved", "inputs prepared", "model called"]
+    engine.engine_config = SimpleNamespace(use_fused_kernels=False)
+    engine.model_config = SimpleNamespace(hf_config=SimpleNamespace(), tokenizer=SimpleNamespace(pad_token_id=0))
+    output, postprocess = engine.forward_step(iter([batch]), model, None, lambda _, **kwargs: kwargs)
+    output.backward()
+    assert postprocess(None) == {"data": batch, "local_cp_size": None}
+    assert events == ["batch moved", "inputs prepared"]
     assert model.seen["position_ids"] is None
     assert torch.equal(features.grad, torch.ones_like(features))
     assert not model._forward_pre_hooks
-    assert engine._forward_model is None
-    assert engine._input_adapters is None
+    assert not hasattr(engine, "_forward_model")
+    assert not hasattr(engine, "_input_adapters")
 
     events.clear()
     engine.fail_after_prepare = True
@@ -205,8 +222,8 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
         engine.forward_step(iter([batch]), model, None, None)
     assert events == ["batch moved", "inputs prepared"]
     assert not model._forward_pre_hooks
-    assert engine._forward_model is None
-    assert engine._input_adapters is None
+    assert not hasattr(engine, "_forward_model")
+    assert not hasattr(engine, "_input_adapters")
 
 
 def test_native_megatron_adapter_rejects_mtp():
@@ -227,6 +244,36 @@ def test_native_megatron_adapter_rejects_mtp():
     )
 
     with pytest.raises(ValueError, match="does not support MTP"):
+        OmniMegatronEngine(model_config, engine_config, None, None)
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "message"),
+    [
+        ("dynamic_context_parallel", True, "dynamic CP"),
+        ("router_replay", SimpleNamespace(mode="R2"), "router replay"),
+        ("use_remove_padding", True, "use_remove_padding=false"),
+        ("use_fused_kernels", True, "use_fused_kernels=false"),
+    ],
+)
+def test_native_megatron_adapter_fails_closed_on_unsupported_modes(setting, value, message):
+    from verl_omni.workers.engine import OmniMegatronEngine
+
+    if OmniMegatronEngine is None:
+        pytest.skip("Megatron is an optional dependency in CPU CI")
+    from transformers import Qwen3OmniMoeConfig
+
+    model_config = SimpleNamespace(hf_config=Qwen3OmniMoeConfig(), model_stage="thinker")
+    engine_config = SimpleNamespace(
+        use_remove_padding=False,
+        use_fused_kernels=False,
+        pipeline_model_parallel_size=1,
+        context_parallel_size=1,
+        dynamic_context_parallel=False,
+        router_replay=SimpleNamespace(mode="disabled"),
+    )
+    setattr(engine_config, setting, value)
+    with pytest.raises(ValueError, match=message):
         OmniMegatronEngine(model_config, engine_config, None, None)
 
 
@@ -251,8 +298,8 @@ def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch)
 
     monkeypatch.setattr(MegatronEngineWithLMHead, "__init__", parent_init)
     engine = OmniMegatronEngine(model_config, engine_config, None, None)
-    assert engine._forward_model is None
-    assert engine._input_adapters is None
+    assert not hasattr(engine, "_forward_model")
+    assert not hasattr(engine, "_input_adapters")
     assert engine.model_config is not model_config
     assert engine.model_config.hf_config is not model_config.hf_config
     assert (
