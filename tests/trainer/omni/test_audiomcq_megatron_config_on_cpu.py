@@ -4,6 +4,7 @@
 
 import inspect
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -37,7 +38,28 @@ def public_recipe_config(tmp_path_factory):
             "VAL_FILE": "/tmp/validation.parquet",
         }
     )
-    subprocess.run(["bash", str(LAUNCHER)], cwd=REPO_ROOT, env=env, check=True, timeout=60)
+    # The real Hydra entry point may take over a minute to import on CPU CI.
+    # Own the entire process group so a timeout cannot orphan shell/tee children.
+    process = subprocess.Popen(
+        ["bash", str(LAUNCHER)],
+        cwd=REPO_ROOT,
+        env=env,
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        pytest.fail(f"AudioMCQ config-only launcher timed out; stdout={stdout[-2000:]}, stderr={stderr[-2000:]}")
+    assert process.returncode == 0, f"AudioMCQ config-only launcher failed: {stderr[-2000:]}"
     [config_path] = output_dir.glob("run.*/config.yaml")
     return config_path
 

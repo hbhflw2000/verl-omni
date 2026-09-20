@@ -86,6 +86,26 @@ def split_rows(rows: list[dict], validation_size: int, seed: int) -> tuple[list[
 
 
 def convert(input_jsonl: Path, audio_root: Path, output_dir: Path, validation_size: int, seed: int) -> dict:
+    """Audit AudioMCQ records and write a deterministic, asset-disjoint split.
+
+    Args:
+        input_jsonl: JSONL records with question, choices, answer, and audio_path.
+        audio_root: Root containing the referenced nonempty audio files.
+        output_dir: New directory for the generated dataset; it must not exist.
+        validation_size: Number of distinct audio assets held out for validation.
+        seed: Seed used to shuffle audio assets before splitting.
+
+    Returns:
+        Report with source paths, seed, split row counts, and dropped-row reasons.
+        The report is also saved as ``dataset_info.json`` beside ``train.parquet``
+        and ``validation.parquet`` in ``output_dir``.
+
+    Raises:
+        FileExistsError: If ``output_dir`` already exists.
+        ValueError: If a JSONL row is not an object or too few valid assets
+            remain to form both splits. Invalid or out-of-root audio rows are
+            counted as dropped and never written to either parquet.
+    """
     targets = [output_dir / name for name in ("train.parquet", "validation.parquet", "dataset_info.json")]
     if output_dir.exists():
         raise FileExistsError("Use a new output directory; existing prepared datasets are not overwritten")

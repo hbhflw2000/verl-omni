@@ -23,7 +23,7 @@ Both **GPU** and **NPU** training platforms are supported:
 For the base environment setup, see the [installation guide](../../docs/start/install.md).
 
 For **Megatron full-parameter audio-only RL**, see the
-[AudioMCQ separate-async recipe](qwen3_omni/README_audiomcq.md), including an
+[AudioMCQ separate-async recipe](qwen3_omni/README.md), including an
 offline toy-model smoke and the configurable full-model run.
 
 ## Installation

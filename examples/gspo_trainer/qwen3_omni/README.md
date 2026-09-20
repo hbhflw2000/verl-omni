@@ -1,5 +1,7 @@
 # AudioMCQ with Megatron and V1 separate-async rollout
 
+Last updated: 09/20/2026
+
 This recipe trains all Thinker language-model parameters (LoRA rank zero),
 freezes the vision/audio towers, and generates text conditioned on audio with
 standalone vLLM-Omni replicas. It uses `trainer.v1.trainer_mode=omni_separate_async`.
@@ -19,7 +21,7 @@ upstream Megatron helpers without changing the worker/rollout HF configuration.
 ## Environment and data
 
 Use the repository's pinned verl/vLLM-Omni runtime and install the audio extra
-(`pip install -e '.[audio]'`). Megatron also requires a compatible Megatron-Core,
+(`uv pip install -e '.[audio]'`). Megatron also requires a compatible Megatron-Core,
 Transformer Engine, and Megatron-Bridge with Qwen3-Omni audio forward/export
 support. The recipe selects `use_mbridge=true`, `vanilla_mbridge=false`.
 The development audio bridge is
@@ -81,7 +83,9 @@ memory. This does not add image samples or unfreeze either tower. The shared
 server's existing frontend multimodal-cache reset must also run after sleep;
 direct `AsyncOmni.sleep()` alone does not cover that server lifecycle.
 
-Download AudioMCQ and its audio assets separately, respecting their licenses.
+Download the [AudioMCQ-StrongAC-GeminiCoT dataset and audio assets](https://huggingface.co/datasets/Harland/AudioMCQ-StrongAC-GeminiCoT)
+separately. Its [dataset card](https://huggingface.co/datasets/Harland/AudioMCQ-StrongAC-GeminiCoT/blob/main/README.md)
+lists Apache-2.0; check the terms of the underlying audio sources as well.
 Prepare a local `data.jsonl` containing `question`, `choices`, `answer`,
 `audio_path`, and optional `source_dataset`/`id` fields:
 
