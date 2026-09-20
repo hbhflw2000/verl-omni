@@ -8,6 +8,8 @@ import pytest
 import torch
 from verl.utils.model import extract_multi_modal_inputs
 
+pytest.importorskip("verl.models.mcore.util", reason="Megatron-Core is optional in CPU CI")
+
 from verl_omni.pipelines.qwen3_omni.megatron_inputs import qwen3_omni_forward_model_engine
 
 
