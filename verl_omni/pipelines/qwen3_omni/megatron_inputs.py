@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qwen3-Omni Thinker inputs at verl's Megatron BSHD model-call boundary."""
 
+from copy import copy, deepcopy
 from typing import Callable
 
 import torch
@@ -17,6 +18,29 @@ _MULTIMODAL_KEYS = (
     "feature_attention_mask",
     "audio_feature_lengths",
 )
+
+
+def prepare_qwen3_omni_megatron_config(model_config, engine_config):
+    """Validate Thinker support and return an isolated Megatron config view."""
+    if model_config.hf_config.model_type != "qwen3_omni_moe" or model_config.model_stage != "thinker":
+        raise ValueError("The Omni Megatron engine currently supports Qwen3-Omni Thinker only.")
+    if getattr(getattr(model_config, "mtp", None), "enable", False):
+        raise ValueError("Qwen3-Omni Megatron does not support MTP because the Thinker constructs M-RoPE.")
+    if engine_config.use_remove_padding or engine_config.use_fused_kernels:
+        raise ValueError("Qwen3-Omni Megatron requires use_remove_padding=false and use_fused_kernels=false.")
+    if engine_config.pipeline_model_parallel_size != 1 or engine_config.context_parallel_size != 1:
+        raise ValueError("Qwen3-Omni Megatron BSHD forward currently requires PP=CP=1.")
+    if getattr(engine_config, "dynamic_context_parallel", False):
+        raise ValueError("Qwen3-Omni Megatron BSHD forward does not support dynamic CP.")
+    if getattr(getattr(engine_config, "router_replay", None), "mode", "disabled") != "disabled":
+        raise ValueError("Qwen3-Omni Megatron BSHD forward does not support router replay.")
+    # Upstream module construction reads text_config.hidden_size even for
+    # policy models. Keep this compatibility view private to the engine;
+    # the worker/rollout retain the original nested Omni configuration.
+    model_config = copy(model_config)
+    model_config.hf_config = deepcopy(model_config.hf_config)
+    model_config.hf_config.text_config = model_config.hf_config.thinker_config.text_config
+    return model_config
 
 
 def qwen3_omni_forward_model_engine(

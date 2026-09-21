@@ -1,6 +1,6 @@
 # AudioMCQ with Megatron and V1 separate-async rollout
 
-Last updated: 09/20/2026
+Last updated: 09/21/2026
 
 This recipe trains all Thinker language-model parameters (LoRA rank zero),
 freezes the vision/audio towers, and generates text conditioned on audio with
@@ -8,8 +8,10 @@ standalone vLLM-Omni replicas. It uses `trainer.v1.trainer_mode=omni_separate_as
 The toy smoke and full-model run both select the shared
 `verl_omni/trainer/config/omni_megatron_trainer.yaml`; the public launcher adds
 only the AudioMCQ recipe overrides, and the toy adds its small-model overrides.
-`OmniMegatronEngine` follows verl's Megatron LM forward flow with an explicit
-BSHD model call that passes audio tensors and lets the Thinker build M-RoPE.
+`OmniMegatronEngine` follows verl's Megatron LM forward flow and selects its
+model-specific config preparation and forward through the registered pipeline
+adapter. The Qwen3-Omni pipeline owns the support checks, config mapping and
+explicit BSHD model call that passes audio tensors and lets the Thinker build M-RoPE.
 It uses BSHD, PP1 and CP1;
 the development audio bridge does not implement packed sequences, dynamic
 micro-batching is disabled, and MTP, dynamic CP and router replay are rejected.

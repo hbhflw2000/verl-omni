@@ -177,6 +177,7 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
     from verl.workers.engine.base import EngineRegistry
     from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
 
+    from verl_omni.pipelines.qwen3_omni.thinker_training_adapter import Qwen3OmniThinkerAdapter
     from verl_omni.workers.engine.megatron import omni_impl
 
     monkeypatch.setenv("VERL_ENGINE_DEVICE", "cuda")
@@ -226,6 +227,7 @@ def test_native_megatron_adapter_dispatch_and_forward_binding(monkeypatch):
     monkeypatch.setattr(MegatronEngineWithLMHead, "prepare_model_inputs", upstream_prepare)
     model = Model()
     engine = object.__new__(OmniMegatronEngine)
+    engine.model_forward = Qwen3OmniThinkerAdapter.get_megatron_forward()
     engine.engine_config = SimpleNamespace(use_fused_kernels=False)
     engine.model_config = SimpleNamespace(hf_config=SimpleNamespace(), tokenizer=SimpleNamespace(pad_token_id=0))
     output, postprocess = engine.forward_step(iter([batch]), model, None, lambda _, **kwargs: kwargs)
@@ -256,7 +258,10 @@ def test_native_megatron_adapter_rejects_mtp():
     from transformers import Qwen3OmniMoeConfig
 
     model_config = SimpleNamespace(
-        hf_config=Qwen3OmniMoeConfig(), model_stage="thinker", mtp=SimpleNamespace(enable=True)
+        architecture="Qwen3OmniMoeForConditionalGeneration",
+        hf_config=Qwen3OmniMoeConfig(),
+        model_stage="thinker",
+        mtp=SimpleNamespace(enable=True),
     )
     engine_config = SimpleNamespace(
         use_remove_padding=False,
@@ -276,6 +281,8 @@ def test_native_megatron_adapter_rejects_mtp():
         ("router_replay", SimpleNamespace(mode="R2"), "router replay"),
         ("use_remove_padding", True, "use_remove_padding=false"),
         ("use_fused_kernels", True, "use_fused_kernels=false"),
+        ("pipeline_model_parallel_size", 2, "PP=CP=1"),
+        ("context_parallel_size", 2, "PP=CP=1"),
     ],
 )
 def test_native_megatron_adapter_fails_closed_on_unsupported_modes(setting, value, message):
@@ -285,7 +292,9 @@ def test_native_megatron_adapter_fails_closed_on_unsupported_modes(setting, valu
         pytest.skip("Megatron is an optional dependency in CPU CI")
     from transformers import Qwen3OmniMoeConfig
 
-    model_config = SimpleNamespace(hf_config=Qwen3OmniMoeConfig(), model_stage="thinker")
+    model_config = SimpleNamespace(
+        architecture="Qwen3OmniMoeForConditionalGeneration", hf_config=Qwen3OmniMoeConfig(), model_stage="thinker"
+    )
     engine_config = SimpleNamespace(
         use_remove_padding=False,
         use_fused_kernels=False,
@@ -307,7 +316,11 @@ def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch)
     from transformers import Qwen3OmniMoeConfig
     from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
 
-    model_config = SimpleNamespace(hf_config=Qwen3OmniMoeConfig(), model_stage="thinker")
+    from verl_omni.pipelines.qwen3_omni.thinker_training_adapter import Qwen3OmniThinkerAdapter
+
+    model_config = SimpleNamespace(
+        architecture="Qwen3OmniMoeForConditionalGeneration", hf_config=Qwen3OmniMoeConfig(), model_stage="thinker"
+    )
     engine_config = SimpleNamespace(
         use_remove_padding=False,
         use_fused_kernels=False,
@@ -320,6 +333,8 @@ def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch)
 
     monkeypatch.setattr(MegatronEngineWithLMHead, "__init__", parent_init)
     engine = OmniMegatronEngine(model_config, engine_config, None, None)
+    assert engine.model_adapter_cls is Qwen3OmniThinkerAdapter
+    assert engine.model_forward is Qwen3OmniThinkerAdapter.get_megatron_forward()
     assert not hasattr(engine, "_forward_model")
     assert not hasattr(engine, "_input_adapters")
     assert engine.model_config is not model_config
@@ -331,3 +346,70 @@ def test_native_megatron_config_view_does_not_mutate_rollout_config(monkeypatch)
     engine.model_config.hf_config.text_config.hidden_size = 128
     assert not hasattr(model_config.hf_config, "text_config")
     assert model_config.hf_config.thinker_config.text_config.hidden_size != 128
+
+
+def test_native_megatron_uses_registered_pipeline_without_qwen_config(monkeypatch):
+    from verl_omni.workers.engine import OmniMegatronEngine
+
+    if OmniMegatronEngine is None:
+        pytest.skip("Megatron is an optional dependency in CPU CI")
+    from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
+
+    from verl_omni.pipelines.model_base import OmniModelBase
+
+    model_config = SimpleNamespace(architecture="TestOmni", model_stage="thinker")
+    engine_config = object()
+    prepared_config = object()
+    events = []
+
+    def model_forward(*args, **kwargs):
+        return args, kwargs
+
+    class Adapter(OmniModelBase):
+        @classmethod
+        def prepare_megatron_config(cls, config, engine):
+            assert config is model_config
+            assert engine is engine_config
+            events.append("config prepared")
+            return prepared_config
+
+        @classmethod
+        def get_megatron_forward(cls):
+            events.append("forward selected")
+            return model_forward
+
+    def parent_init(engine, config, engine_cfg, *_args):
+        assert config is prepared_config
+        assert engine_cfg is engine_config
+        events.append("parent initialized")
+
+    monkeypatch.setitem(OmniModelBase._registry, ("TestOmni", "thinker"), Adapter)
+    monkeypatch.setattr(MegatronEngineWithLMHead, "__init__", parent_init)
+    engine = OmniMegatronEngine(model_config, engine_config, None, None)
+    assert events == ["config prepared", "forward selected", "parent initialized"]
+    assert engine.model_adapter_cls is Adapter
+    assert engine.model_forward is model_forward
+
+
+def test_native_megatron_rejects_adapter_without_backend_support(monkeypatch):
+    from verl_omni.workers.engine import OmniMegatronEngine
+
+    if OmniMegatronEngine is None:
+        pytest.skip("Megatron is an optional dependency in CPU CI")
+    from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
+
+    from verl_omni.pipelines.model_base import OmniModelBase
+
+    class FsdpOnlyAdapter(OmniModelBase):
+        pass
+
+    def parent_init(*_args):
+        pytest.fail("Unsupported adapters must fail before Megatron initialization")
+
+    monkeypatch.setitem(OmniModelBase._registry, ("FsdpOnlyOmni", "thinker"), FsdpOnlyAdapter)
+    monkeypatch.setattr(MegatronEngineWithLMHead, "__init__", parent_init)
+    model_config = SimpleNamespace(architecture="FsdpOnlyOmni", model_stage="thinker")
+    with pytest.raises(NotImplementedError, match="FsdpOnlyAdapter does not support Megatron training"):
+        OmniMegatronEngine(model_config, None, None, None)
+    with pytest.raises(NotImplementedError, match="does not provide a Megatron forward"):
+        FsdpOnlyAdapter.get_megatron_forward()

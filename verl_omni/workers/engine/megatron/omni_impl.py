@@ -1,8 +1,7 @@
 # Copyright 2026 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3-Omni Thinker Megatron engine using verl's BSHD forward flow."""
+"""Omni Megatron engine using pipeline-selected BSHD model forwards."""
 
-from copy import copy, deepcopy
 from functools import partial
 
 import torch
@@ -13,32 +12,17 @@ from verl.utils.device import get_device_id
 from verl.workers.engine.base import EngineRegistry
 from verl.workers.engine.megatron.transformer_impl import MegatronEngineWithLMHead
 
-from verl_omni.pipelines.qwen3_omni.megatron_inputs import qwen3_omni_forward_model_engine
+from verl_omni.pipelines.model_base import OmniModelBase
 
 
 @EngineRegistry.register(model_type="omni_model", backend="megatron")
 class OmniMegatronEngine(MegatronEngineWithLMHead):
-    """Train the Qwen3-Omni Thinker through an explicit BSHD model call."""
+    """Use verl's LM flow with the registered pipeline's Megatron model call."""
 
     def __init__(self, model_config, engine_config, optimizer_config, checkpoint_config):
-        if model_config.hf_config.model_type != "qwen3_omni_moe" or model_config.model_stage != "thinker":
-            raise ValueError("The Omni Megatron engine currently supports Qwen3-Omni Thinker only.")
-        if getattr(getattr(model_config, "mtp", None), "enable", False):
-            raise ValueError("Qwen3-Omni Megatron does not support MTP because the Thinker constructs M-RoPE.")
-        if engine_config.use_remove_padding or engine_config.use_fused_kernels:
-            raise ValueError("Qwen3-Omni Megatron requires use_remove_padding=false and use_fused_kernels=false.")
-        if engine_config.pipeline_model_parallel_size != 1 or engine_config.context_parallel_size != 1:
-            raise ValueError("Qwen3-Omni Megatron BSHD forward currently requires PP=CP=1.")
-        if getattr(engine_config, "dynamic_context_parallel", False):
-            raise ValueError("Qwen3-Omni Megatron BSHD forward does not support dynamic CP.")
-        if getattr(getattr(engine_config, "router_replay", None), "mode", "disabled") != "disabled":
-            raise ValueError("Qwen3-Omni Megatron BSHD forward does not support router replay.")
-        # Upstream module construction reads text_config.hidden_size even for
-        # policy models. Keep this compatibility view private to the engine;
-        # the worker/rollout retain the original nested Omni configuration.
-        model_config = copy(model_config)
-        model_config.hf_config = deepcopy(model_config.hf_config)
-        model_config.hf_config.text_config = model_config.hf_config.thinker_config.text_config
+        self.model_adapter_cls = OmniModelBase.get_class(model_config)
+        model_config = self.model_adapter_cls.prepare_megatron_config(model_config, engine_config)
+        self.model_forward = self.model_adapter_cls.get_megatron_forward()
         super().__init__(model_config, engine_config, optimizer_config, checkpoint_config)
 
     def forward_step(self, batch_iter, model, logits_processor_func, postprocess_micro_batch_func):
@@ -48,9 +32,9 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
             batch, key="use_fused_kernels", default=self.engine_config.use_fused_kernels
         )
         if use_fused_kernels:
-            raise ValueError("Qwen3-Omni Megatron does not support per-batch fused kernels.")
+            raise ValueError("Omni Megatron BSHD forward does not support per-batch fused kernels.")
         if tu.get_non_tensor_data(batch, key="local_cp_size", default=None) is not None:
-            raise ValueError("Qwen3-Omni Megatron BSHD forward does not support dynamic CP.")
+            raise ValueError("Omni Megatron BSHD forward does not support dynamic CP.")
 
         calculate_entropy = tu.get_non_tensor_data(batch, key="calculate_entropy", default=False)
         calculate_sum_pi_squared = tu.get_non_tensor_data(batch, key="calculate_sum_pi_squared", default=False)
@@ -84,7 +68,7 @@ class OmniMegatronEngine(MegatronEngineWithLMHead):
         response_attention_mask = None
         if attention_mask is not None and not loss_mask.is_nested:
             response_attention_mask = attention_mask[:, -loss_mask.shape[-1] :]
-        output = qwen3_omni_forward_model_engine(
+        output = self.model_forward(
             model,
             input_ids,
             model_inputs["multi_modal_inputs"],
