@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Preprocess Geometry3K for Qwen3-Omni image-to-text RL.
+r"""Preprocess Geometry3K for Qwen3-Omni image-to-text RL.
 
 The reward used by verl expects an explicit ``<think>...</think>\boxed{...}``
 contract.  This converter states that contract directly instead of relying on
@@ -24,25 +24,43 @@ import os
 import datasets
 
 DATA_SOURCE = "hiyouga/geometry3k"
-ABILITY = "math_vl"
+ABILITY = "math"
 
 SYSTEM_PROMPT = (
-    "You are a geometry reasoning assistant. Start every response with the literal tag <think>. "
-    "Put all reasoning between <think> and </think>. Immediately after </think>, give only the final answer in "
-    "\\boxed{}. Do not write any text or whitespace before <think>."
+    r"You are a geometry reasoning assistant. Start every response with the literal tag <think>. "
+    r"Put all reasoning between <think> and </think>. Immediately after </think>, give only the final answer in "
+    r'\boxed{}. Do not write any text or whitespace before <think>. Do not write labels such as "Your reasoning"; '
+    "output the tags themselves.\n\n"
+    'A valid response to the question "What is 1+1?" is exactly:\n'
+    r"<think>1+1=2.</think>\boxed{2}"
+    "\n\nThe opening <think> tag is mandatory. Beginning directly with reasoning and later writing only </think> "
+    "is invalid."
 )
 
 FORMAT_INSTRUCTION = (
-    "Your first output characters must be <think>. Enclose the reasoning in <think> and </think>, then "
-    "immediately output the final answer in \\boxed{}. Output the literal tags, not a description of them."
+    r"Your first output characters must be <think>. Enclose the reasoning in <think> and </think>, then "
+    r"immediately output the final answer in \boxed{}. Output the literal tags, not a description of them. "
+    r"An implicit opening is invalid: you must explicitly write <think> before the first reasoning word."
 )
 
 
 def build_rl_row(example: dict, split: str, index: int) -> dict:
     """Convert one Geometry3K example to verl's multimodal RL schema."""
-    problem = str(example["problem"]).strip()
+    # Keep source whitespace so regenerated prompts match the dataset exactly.
+    problem = str(example["problem"])
     answer = str(example["answer"]).strip()
     images = example["images"]
+    if not problem.strip():
+        raise ValueError("Geometry3K problem must not be empty")
+    if not answer:
+        raise ValueError("Geometry3K answer must not be empty")
+    if not isinstance(images, list) or not images:
+        raise ValueError("Geometry3K example must contain at least one image")
+    placeholder_count = problem.count("<image>")
+    if placeholder_count != len(images):
+        raise ValueError(
+            f"Geometry3K image placeholder mismatch: prompt has {placeholder_count}, payload has {len(images)}"
+        )
     return {
         "data_source": DATA_SOURCE,
         "prompt": [
@@ -70,6 +88,11 @@ def make_map_fn(split: str):
     return process_fn
 
 
+def preserve_image_bytes(source: datasets.Dataset) -> datasets.Dataset:
+    """Disable image decoding before mapping so parquet keeps source bytes."""
+    return source.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert Geometry3K to verl image-to-text RL parquet.")
     parser.add_argument("--local_dataset_path", default=None, help="Optional local Hugging Face dataset path.")
@@ -82,7 +105,7 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     for split in ("train", "test"):
-        source = dataset[split]
+        source = preserve_image_bytes(dataset[split])
         converted = source.map(
             function=make_map_fn(split),
             with_indices=True,

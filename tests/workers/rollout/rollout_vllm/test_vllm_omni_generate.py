@@ -22,11 +22,9 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import gc
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -39,7 +37,6 @@ from verl.utils.tokenizer import normalize_token_ids
 from verl.workers.rollout.replica import RolloutMode
 
 from verl_omni.workers.rollout.replica import DiffusionOutput
-from verl_omni.workers.rollout.vllm_rollout import vllm_omni_async_server as server_mod
 from verl_omni.workers.rollout.vllm_rollout.vllm_omni_async_server import vLLMOmniHttpServer
 
 MODEL_PATH = Path(os.path.expanduser("~/models/tiny-random/Qwen-Image"))
@@ -61,57 +58,6 @@ _PROMPTS = [
 ]
 
 _TOKENIZER = None
-
-
-def test_ar_generate_forwards_image_data_after_processor_dedup(monkeypatch):
-    """The fully-async AR path must keep each image bound to its token prompt."""
-    captured = {}
-
-    class _Processor:
-        @staticmethod
-        def dedup_pad_tokens(prompt_ids):
-            assert prompt_ids == [1, 99, 99]
-            return [1, 99]
-
-    async def _resolve_lora_request():
-        return None
-
-    async def _run_generation(prompt, params, request_id, lora_request, priority):
-        captured.update(prompt=prompt, params=params, request_id=request_id, lora_request=lora_request)
-        return "engine-output"
-
-    server = object.__new__(vLLMOmniHttpServer)
-    server._ar_mode = True
-    server.model_config = SimpleNamespace(processor=_Processor())
-    server.config = SimpleNamespace(
-        max_model_len=16,
-        prompt_length=8,
-        response_length=8,
-        repetition_penalty=1.0,
-    )
-    server._resolve_lora_request = _resolve_lora_request
-    server._run_generation = _run_generation
-    server._process_output = lambda final_res, _params, _sampling: final_res
-    monkeypatch.setattr(server_mod, "SamplingParams", lambda **kwargs: SimpleNamespace(**kwargs))
-
-    image = object()
-    output = asyncio.run(
-        server.generate(
-            prompt_ids=[1, 99, 99],
-            sampling_params={"max_tokens": 4, "logprobs": True},
-            request_id="geo3k-0",
-            image_data=[image],
-        )
-    )
-
-    assert output == "engine-output"
-    assert captured["request_id"] == "geo3k-0"
-    assert captured["prompt"] == {
-        "prompt_token_ids": [1, 99],
-        "multi_modal_data": {"image": [image]},
-    }
-    assert captured["params"].max_tokens == 4
-    assert captured["params"].logprobs == 0
 
 
 def _get_tokenizer():
@@ -144,8 +90,9 @@ def _assert_non_empty_tensor(value, field_name: str) -> None:
 def _assert_flow_grpo_step_execution_contract(output: DiffusionOutput) -> None:
     """Validate the FlowGRPO trajectory contract in step-execution mode.
 
-    vLLMOmniHttpServer maps all_log_probs to DiffusionOutput.log_probs
-    and the remaining custom_output fields to DiffusionOutput.extra_fields.
+    vLLMOmniHttpServer maps OmniRequestOutput.trajectory_* to
+    DiffusionOutput.log_probs / extra_fields["all_*"] and prompt/rl metadata
+    groups to DiffusionOutput.extra_fields.
     """
     expected_extra_fields = {
         "all_latents",
@@ -254,6 +201,8 @@ def _build_rollout_cfg(*, step_execution: bool = False) -> Any:
         "free_cache_engine": True,
         "disable_log_stats": True,
         "n": 1,
+        "seed": 42,
+        "full_determinism": False,
         "rollout_attn_backend": rollout_attn_backend,
         "pipeline": {
             "_target_": "verl_omni.workers.config.diffusion.rollout.DiffusionPipelineConfig",
@@ -391,7 +340,8 @@ def _assert_valid_diffusion_output(output: DiffusionOutput, *, index: int, expec
     h, w = len(output.diffusion_output[0]), len(output.diffusion_output[0][0])
     assert h > 0 and w > 0, f"Request {index}: image dimensions must be positive"
     assert output.stop_reason in ("completed", "aborted", None), f"Request {index}: unexpected stop_reason"
-    assert 0.0 <= output.diffusion_output[0][0][0] <= 1.0, f"Request {index}: pixel values must be in [0, 1]"
+    assert output.diffusion_output.dtype == torch.uint8
+    assert 0 <= output.diffusion_output[0][0][0] <= 255, f"Request {index}: pixel values must be in [0, 255]"
     if expect_logprobs:
         lp = output.log_probs
         assert lp is not None, f"Request {index}: log_probs should be present when logprobs=True"

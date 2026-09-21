@@ -49,7 +49,10 @@ from verl_omni.trainer.diffusion.diffusion_metric_utils import (
     compute_throughput_metrics_diffusion,
     compute_timing_metrics_diffusion,
 )
-from verl_omni.trainer.diffusion.diffusion_trainer_utils import NoOpCheckpointManager
+from verl_omni.trainer.diffusion.diffusion_trainer_utils import (
+    NoOpCheckpointManager,
+    worker_group_port_ranges,
+)
 from verl_omni.trainer.omni.omni_algos import (
     get_omni_loss_fn,
 )
@@ -71,6 +74,17 @@ class OmniPPOTrainerSync(PPOTrainerSync):
         model_config: OmniModelConfig = omega_conf_to_dataclass(self.config.actor_rollout_ref.model, OmniModelConfig)
         self.tokenizer = model_config.tokenizer
         self.processor = model_config.processor
+
+    # The rollout server resumes admission after every successful wake; this
+    # bridge remains a safety net for holds not preceded by a wake (init).
+    # TODO (long): check and fix the resume bridge on the rollout side.
+    def on_init_end(self):
+        super().on_init_end()
+        self.checkpoint_manager.resume_generation_replicas()
+
+    def on_step_end(self):
+        super().on_step_end()
+        self.checkpoint_manager.resume_generation_replicas()
 
 
 class OmniDirectPreferenceRayTrainer:
@@ -218,8 +232,8 @@ class OmniDirectPreferenceRayTrainer:
             with open_dict(self.config):
                 if OmegaConf.select(self.config, "actor_rollout_ref.actor.optim"):
                     self.config.actor_rollout_ref.actor.optim.total_training_steps = total_training_steps
-        except Exception as exc:
-            print(f"Warning: Could not set total_training_steps in config. Structure missing? Error: {exc}")
+        except (KeyError, TypeError, AttributeError, OmegaConf.errors.OmegaConfBaseException) as exc:
+            raise RuntimeError("Failed to propagate trainer.total_training_steps to actor optimizer config.") from exc
 
     def init_workers(self) -> None:
         """Initialize actor/ref workers for offline omni direct-preference training."""
@@ -279,9 +293,13 @@ class OmniDirectPreferenceRayTrainer:
                 wg_kwargs["worker_nsight_options"] = OmegaConf.to_container(worker_nsight_options)
         wg_kwargs["device_name"] = self.device_name
 
-        for resource_pool, class_dict in self.resource_pool_to_cls.items():
+        master_port_range = OmegaConf.select(self.config.trainer, "ray_master_port_range")
+        port_ranges = worker_group_port_ranges(master_port_range, len(self.resource_pool_to_cls))
+        for (resource_pool, class_dict), port_range in zip(self.resource_pool_to_cls.items(), port_ranges, strict=True):
             if not class_dict:
                 continue
+            if port_range is not None:
+                wg_kwargs["master_port_range"] = port_range
             worker_dict_cls = create_colocated_worker_cls(class_dict=class_dict)
             wg_dict = self.ray_worker_group_cls(
                 resource_pool=resource_pool,
@@ -368,6 +386,11 @@ class OmniDirectPreferenceRayTrainer:
             global_step_folder = self.config.trainer.resume_from_path
             if not os.path.isabs(global_step_folder):
                 global_step_folder = os.path.join(os.getcwd(), global_step_folder)
+        else:
+            raise ValueError(
+                f"Unknown trainer.resume_mode={self.config.trainer.resume_mode!r}. "
+                "Available options: ['disable', 'auto', 'resume_path']."
+            )
 
         print(f"Load from checkpoint folder: {global_step_folder}")
         self.global_steps = int(global_step_folder.split("global_step_")[-1])

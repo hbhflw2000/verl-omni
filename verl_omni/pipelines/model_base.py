@@ -14,7 +14,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import torch
 from diffusers import ModelMixin, SchedulerMixin
@@ -60,19 +60,12 @@ class DiffusionModelBase(ABC):
     @classmethod
     def get_class(cls, model_config: DiffusionModelConfig) -> type["DiffusionModelBase"]:
         """Return the registered subclass for ``(architecture, algorithm)``."""
-        architecture = model_config.architecture
-        algorithm = model_config.algorithm
+        return cls.get_class_by_name(model_config.architecture, model_config.algorithm, model_config.external_lib)
 
-        if architecture in {"QwenImagePipeline", "QwenImageEditPlusPipeline"}:
-            logger.info(
-                "Applying monkey-patch for QwenImageTransformer2DModel Ulysses SP "
-                "This workaround will be removed once we upgrade to a diffusers release that "
-                "includes the upstream fix."
-            )
-            from verl_omni.models.diffusers.qwen_image import apply_qwen_image_ulysses_mask_fix
-
-            apply_qwen_image_ulysses_mask_fix()
-        return cls.get_class_by_name(architecture, algorithm, model_config.external_lib)
+    @classmethod
+    def peek_class(cls, architecture: str, algorithm: str) -> Optional[type["DiffusionModelBase"]]:
+        """Return the registered adapter for ``(architecture, algorithm)`` or ``None`` (non-fatal)."""
+        return cls._registry.get((architecture, algorithm))
 
     @classmethod
     def get_class_by_name(
@@ -109,6 +102,32 @@ class DiffusionModelBase(ABC):
     @classmethod
     def configure_train_mode(cls, module: torch.nn.Module) -> None:
         """Hook called after ``module.train()`` for architecture-specific overrides."""
+        return
+
+    @classmethod
+    def preserve_fp32_modules(cls) -> bool:
+        """Whether to preserve diffusers ``_keep_in_fp32_modules`` during model loading.
+
+        Models whose FSDP wrapping units contain both fp32 and reduced-precision
+        parameters should override this and return ``False``.
+        """
+        return True
+
+    @classmethod
+    def get_fsdp_ignored_module_names(cls, model_config) -> list[str]:
+        """Submodule name components to leave unsharded under FSDP2 (default: none).
+
+        FSDP2 only — under ``strategy=fsdp`` the engine raises when a
+        non-empty list is declared. Declare a subtree whose forward is
+        skipped for some micro-batches: unsharded forwards emit no
+        collectives, so the skip cannot desync ranks. Ignored parameters
+        must stay frozen — FSDP2 does not synchronize their gradients.
+        """
+        return []
+
+    @classmethod
+    def validate_lora_config(cls, model_config: DiffusionModelConfig) -> None:
+        """Validate LoRA settings; default no-op. Override for rollout-sync-constrained models."""
         return
 
     @classmethod
@@ -367,7 +386,7 @@ class DiffusionI2IModelBase(DiffusionModelBase):
                 "this key is reserved by the MFU FLOPs counter for the denoised "
                 "latent. The rollout adapter likely output 'image_latents' instead "
                 "of 'condition_image_latents'. Check the rollout adapter's "
-                "custom_output keys."
+                "rl metadata keys."
             )
 
         hidden_states = model_inputs["hidden_states"]
@@ -472,6 +491,7 @@ class OmniModelBase(ABC):
     """
 
     _registry: dict[tuple[str, str], type["OmniModelBase"]] = {}
+    auto_model_class: Any = None
 
     @classmethod
     def register(cls, architecture: str, stage: str = "thinker"):
@@ -503,6 +523,11 @@ class OmniModelBase(ABC):
             model_config.model_stage,
             getattr(model_config, "external_lib", None),
         )
+
+    @classmethod
+    def peek_class(cls, architecture: str, stage: str) -> Optional[type["OmniModelBase"]]:
+        """Return the registered adapter for ``(architecture, stage)`` or ``None``."""
+        return cls._registry.get((architecture, stage))
 
     @classmethod
     def get_class_by_name(
@@ -538,6 +563,11 @@ class OmniModelBase(ABC):
                 f"stage={stage!r}). Registered: {registered}. "
                 f"Set ``external_lib`` to load your training adapter."
             ) from None
+
+    @classmethod
+    def register_auto_classes(cls) -> None:
+        """Register optional model-package classes with Transformers auto APIs."""
+        return
 
     @classmethod
     @abstractmethod
@@ -608,7 +638,6 @@ class OmniModelBase(ABC):
         Default implementation strips the submodules returned by
         ``get_strip_modules``.  Override to also:
 
-        - Register the model class with ``AutoModelForCausalLM``.
         - Redirect ``forward()`` and embedding accessors to the
           trainable sub-component.
         - Force ``tie_word_embeddings=False`` for FSDP compatibility.
@@ -626,6 +655,56 @@ class OmniModelBase(ABC):
                 delattr(module, submod_name)
 
         return module
+
+    @classmethod
+    def prepare_megatron_config(cls, model_config, engine_config):
+        """Validate Megatron support and return the backend's model-config view.
+
+        Called before the Megatron engine initializes. Implementations must
+        reject unsupported configurations and preserve the original config
+        used by the processor and rollout. FSDP adapters need not implement it.
+        """
+        raise NotImplementedError(f"{cls.__name__} does not support Megatron training.")
+
+    @classmethod
+    def get_megatron_forward(cls) -> Callable:
+        """Return the pipeline's model-forward callable for the BSHD LM engine.
+
+        The callable consumes the prepared token and multimodal inputs plus
+        verl's logits-processing arguments, and returns BSHD-postprocessed
+        output. Import optional Megatron dependencies inside the override.
+        """
+        raise NotImplementedError(f"{cls.__name__} does not provide a Megatron forward.")
+
+    @classmethod
+    def get_fsdp_ignored_module_names(cls, model_config) -> list[str]:
+        """Submodule name components to leave unsharded under FSDP2 (default: none).
+
+        FSDP2 only — under ``strategy=fsdp`` the engine raises when a
+        non-empty list is declared. Declare a subtree whose forward is
+        skipped for some micro-batches: unsharded forwards emit no
+        collectives, so the skip cannot desync ranks. Ignored parameters
+        must stay frozen — FSDP2 does not synchronize their gradients.
+        """
+        return []
+
+    @classmethod
+    def prepare_model_inputs(cls, model_inputs: dict[str, Any], micro_batch, model_config) -> dict[str, Any]:
+        """Add model-native rollout data to an actor replay forward call.
+
+        ``model_inputs`` contains the standard language-model inputs prepared
+        by verl. A trainable Talker stage may also need trajectory or conditioning
+        data retained under a model-defined key in the per-sample rollout
+        ``extra_fields``. ``AgentLoopWorker`` batches each such key into the top
+        level of ``micro_batch``. A model adapter can validate its own namespaced
+        payload and return the exact inputs required to replay the sampled policy
+        sequence.
+
+        The default keeps the standard autoregressive path unchanged. An
+        adapter that overrides this hook must fail closed when required fields
+        or shapes are missing instead of reconstructing a different trajectory.
+        """
+        return model_inputs
 
 
 class OmniRolloutPipelineBase:
@@ -645,6 +724,7 @@ class OmniRolloutPipelineBase:
     """
 
     _registry: dict[str, type["OmniRolloutPipelineBase"]] = {}
+    supports_async_chunk = True
 
     @classmethod
     def register(cls, model_type: str):
@@ -666,6 +746,22 @@ class OmniRolloutPipelineBase:
         topology or external runner configuration.
         """
         return cls._registry.get(model_type)
+
+    @classmethod
+    def postprocess_agent_loop_output(cls, output, *, tokenizer, response_length: int):
+        """Map model-native rollout data to the policy sequence used by RL.
+
+        Adapters for an omni model's autoregressive Talker stage should put the
+        sampled policy tokens in ``response_ids`` and align ``response_mask``
+        and optional ``response_logprobs`` one-to-one. Architecture-specific
+        trajectory and conditioning data stays under a model-defined, namespaced
+        key in ``extra_fields``. ``AgentLoopWorker`` later exposes that key at the
+        top level of the actor micro-batch for
+        :meth:`OmniModelBase.prepare_model_inputs`.
+
+        The default preserves the standard text-token output unchanged.
+        """
+        return output
 
     @classmethod
     @abstractmethod
@@ -704,6 +800,16 @@ class OmniRolloutPipelineBase:
             dict[int, dict]: Per-stage flags (empty dict by default).
         """
         return {}
+
+    @classmethod
+    def weight_sync_stage_ids(cls, pipeline_mode="thinker_only") -> list[int] | None:
+        """Return stages that receive actor weights, or all stages by default."""
+        return None
+
+    @classmethod
+    def policy_stage_id(cls, pipeline_mode="thinker_only") -> int:
+        """Return the stage whose sampling parameters and logprobs define the policy."""
+        return 0
 
     @classmethod
     def get_pipeline_id(cls, pipeline_mode: str = "thinker_only") -> str:
@@ -759,3 +865,30 @@ class OmniRolloutPipelineBase:
             dict: Extra key-value pairs merged into the stage's engine args.
         """
         return {}
+
+    @classmethod
+    def prepare_engine_prompt(
+        cls,
+        prompt_ids: list[int],
+        model_config,
+        multi_modal_data: dict,
+        mm_processor_kwargs: Optional[dict] = None,
+    ) -> dict | None:
+        """Build an architecture-specific rollout prompt when required."""
+        return None
+
+    @classmethod
+    def combine_engine_outputs(cls, outputs: list, prompt: dict) -> tuple[Any, dict[str, Any]]:
+        """Select the policy output and collect architecture-specific fields.
+
+        Overriding this hook opts an adapter into retaining and assembling
+        multiple final stage outputs. The default preserves single-output AR
+        behavior.
+        """
+        if not outputs:
+            raise RuntimeError("The omni rollout engine returned no outputs.")
+        if len(outputs) != 1:
+            raise NotImplementedError(
+                "An omni rollout adapter with multiple final outputs must implement combine_engine_outputs()."
+            )
+        return outputs[0], {}
