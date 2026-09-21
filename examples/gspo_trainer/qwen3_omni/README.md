@@ -1,6 +1,29 @@
-# AudioMCQ with Megatron and V1 separate-async rollout
+# Qwen3-Omni Thinker GSPO recipes
 
 Last updated: 09/21/2026
+
+This directory contains both FSDP2 and Megatron recipes. For non-Megatron
+setup, data preparation and training instructions, see the
+[parent GSPO guide](../README.md). The launchers below contain each recipe's
+defaults and accept CLI overrides.
+
+| Recipe | Backend / platform | Launcher |
+| --- | --- | --- |
+| GSM8K LoRA | FSDP2 / GPU | [Thinker LoRA](run_qwen3_omni_thinker_gspo_lora_v1.sh) |
+| MMK12 LoRA | FSDP2 / GPU | [MMK12](run_qwen3_omni_thinker_gspo_lora_mmk12_v1.sh) |
+| MMK12 LoRA, separate-async | FSDP2 / GPU | [MMK12 separate-async](run_qwen3_omni_thinker_gspo_lora_mmk12_separate_async_v1.sh) |
+| MMK12 LoRA | FSDP2 / NPU | [MMK12 NPU](run_qwen3_omni_thinker_gspo_lora_mmk12_v1_npu.sh) |
+| MMK12 LoRA with on-policy distillation | FSDP2 / NPU | [MMK12 OPD](run_qwen3_omni_thinker_gspo_lora_mmk12_v1_opd_npu.sh) |
+| AVQA LoRA | FSDP2 / GPU | [AVQA LoRA](run_qwen3_omni_thinker_gspo_lora_avqa_v1.sh) |
+| AVQA full-parameter | FSDP2 / NPU | [AVQA NPU](run_qwen3_omni_thinker_gspo_npu_avqa_v1.sh) |
+| NExT-QA full-parameter | FSDP2 / NPU | [NExT-QA NPU](run_qwen3_omni_thinker_gspo_npu_nextqa_v1.sh) |
+| AudioMCQ full-parameter, separate-async | Megatron / GPU | [AudioMCQ](run_qwen3_omni_megatron_audiomcq_separate_async.sh) |
+
+The remaining sections describe the **Megatron AudioMCQ** recipe, its dependency
+prerequisites and validation limits. For model-adapter development, see the
+[Megatron integration notes](../../../docs/contributing/integrating_an_omni_model.md#21-megatron-training-adapters).
+
+## AudioMCQ with Megatron and V1 separate-async rollout
 
 This recipe trains all Thinker language-model parameters (LoRA rank zero),
 freezes the vision/audio towers, and generates text conditioned on audio with
