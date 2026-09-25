@@ -28,6 +28,7 @@ See {doc}`start/models` for the full model catalogue and which algorithms run on
 
 start/install.md
 start/install_npu.md
+start/install_rocm.md
 start/models.md
 start/flowgrpo_quickstart.md
 start/multi_node_training.md
@@ -143,6 +144,7 @@ contributing/integrating_a_stepwise_continuous_batching_model.md
 contributing/integrating_a_new_policy_gradient_algorithm_for_diffusion_model.md
 contributing/integrating_a_new_direct_preference_algorithm_for_diffusion_model.md
 contributing/gpu_smoke_tests.md
+contributing/npu_smoke_tests.md
 contributing/common_pitfalls.md
 ```
 
