@@ -1,6 +1,6 @@
 # Qwen3-Omni Thinker GSPO Trainer
 
-Last updated: 09/14/2026
+Last updated: 09/25/2026
 
 This example shows how to post-train the **Qwen3-Omni-30B-A3B Thinker** with
 **GSPO** on multimodal reasoning tasks, using FSDP for the actor and `vllm-omni` as
@@ -24,7 +24,9 @@ For the base environment setup, see the [installation guide](../../docs/start/in
 
 For **Megatron full-parameter audio-only RL**, see the
 [AudioMCQ separate-async recipe](qwen3_omni/README.md), including an
-offline toy-model smoke and the configurable full-model run.
+offline toy-model smoke and the configurable full-model run. That path is
+experimental and is not reproducible from the current public pins; the FSDP
+recipes above remain the supported default.
 
 ## Installation
 
