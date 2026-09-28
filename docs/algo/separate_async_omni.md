@@ -29,7 +29,7 @@ for staleness; the replay buffer's
 ## GPU layout
 
 `trainer.n_gpus_per_node × trainer.nnodes` GPUs run the actor (FSDP2 LoRA by
-default, or Megatron for the full-parameter AudioMCQ recipe);
+default, or Megatron for the full-parameter AudioMCQ and AVQA recipes);
 `actor_rollout_ref.rollout.n_gpus_per_node × actor_rollout_ref.rollout.nnodes`
 additional GPUs run standalone rollout replicas
 (`n_gpus_per_node / tensor_model_parallel_size` replicas per node). Single-node
@@ -52,6 +52,10 @@ bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_audiomcq_separate_
 That launcher is Thinker-only, BSHD, PP=CP=1, AudioMCQ. It is experimental and
 not clean-checkout reproducible yet; see
 [`examples/gspo_trainer/qwen3_omni/README.md`](../../examples/gspo_trainer/qwen3_omni/README.md).
+The same trainer mode also has an image+audio AVQA Megatron launcher in that
+README. Its supporting 150-step H200 run used equivalent settings through an
+earlier entry point; the self-contained launcher has passed CPU configuration
+checks but has not had a separate GPU run. It inherits the public-pin caveat.
 FSDP LoRA remains the default. Key overrides:
 
 | knob | default | meaning |
