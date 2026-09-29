@@ -64,9 +64,7 @@ def test_refuses_to_overwrite_an_original_split(tmp_path):
 
 def test_refuses_same_train_and_validation(tmp_path):
     with pytest.raises(ValueError, match="must be different"):
-        strict.make_strict_train(
-            tmp_path / "same.parquet", tmp_path / "same.parquet", tmp_path / "out.parquet"
-        )
+        strict.make_strict_train(tmp_path / "same.parquet", tmp_path / "same.parquet", tmp_path / "out.parquet")
 
 
 @pytest.mark.parametrize("protected_name", ["train.parquet", "validation.parquet", "train_strict.parquet"])

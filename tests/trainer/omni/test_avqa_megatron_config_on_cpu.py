@@ -52,7 +52,9 @@ def test_avqa_full_model_recipe(tmp_path, num_gpus, rollout_gpus, rollout_tp):
     assert config.data.max_prompt_length == 4096 and config.data.max_response_length == 2048
     assert config.data.mm_processor_kwargs.sampling_rate == 16000
     assert rollout.max_model_len == 6144 and dict(rollout.engine_kwargs.vllm_omni.limit_mm_per_prompt) == {
-        "image": 1, "audio": 1, "video": 0
+        "image": 1,
+        "audio": 1,
+        "video": 0,
     }
     assert config.trainer.n_gpus_per_node == 4
     assert rollout.n_gpus_per_node == rollout_gpus and rollout.tensor_model_parallel_size == rollout_tp
