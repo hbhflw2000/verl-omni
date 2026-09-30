@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full-parameter Qwen3-Omni Thinker GSPO on real AVQA image + audio inputs.
-# The supporting H200 run used four Megatron actor GPUs and four rollout GPUs.
+# Default layout: four Megatron actor GPUs and four standalone rollout GPUs.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
@@ -33,12 +33,8 @@ fi
 
 OUTPUT_BASE=${OUTPUT_DIR:-${TMPDIR:-/tmp}/avqa-megatron}
 mkdir -p "$OUTPUT_BASE"
-OUTPUT_DIR=$(mktemp -d "$OUTPUT_BASE/run.XXXXXX")
-export OUTPUT_DIR
-RUN_DIR=$(mktemp -d "$OUTPUT_DIR/run.XXXXXX")
+RUN_DIR=$(mktemp -d "$OUTPUT_BASE/run.XXXXXX")
 echo "AVQA artifacts: $RUN_DIR"
-export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
-export NCCL_NVLS_ENABLE=${NCCL_NVLS_ENABLE:-0}
 
 export VERL_USE_EXTERNAL_MODULES=verl_omni
 export TENSORBOARD_DIR="$RUN_DIR/tensorboard"
@@ -47,7 +43,7 @@ export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
 export PYTHONUNBUFFERED=1
 cd "$REPO_ROOT"
 
-# The complete AVQA Megatron recipe lives here; no other task launcher is required.
+# Reuse the shared Megatron configuration with AVQA and model/topology overrides.
 args=(
   --config-name omni_megatron_trainer
   "actor_rollout_ref.model.path=${MODEL_PATH}"
@@ -61,18 +57,13 @@ args=(
   actor_rollout_ref.model.use_remove_padding=false
   actor_rollout_ref.actor.ppo_mini_batch_size=16
   actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
-  actor_rollout_ref.actor.use_dynamic_bsz=false
   actor_rollout_ref.actor.clip_ratio_c=10.0
   actor_rollout_ref.actor.optim.lr=1e-6
-  actor_rollout_ref.actor.kl_loss_coef=0.001
-  actor_rollout_ref.actor.kl_loss_type=low_var_kl
   actor_rollout_ref.actor.optim.weight_decay=0.1
   # Keep FP32 master parameters on CPU to fit the four-GPU actor.
   '+actor_rollout_ref.actor.optim.override_optimizer_config={optimizer_cpu_offload:true,optimizer_offload_fraction:1.0,overlap_cpu_optimizer_d2h_h2d:false}'
   actor_rollout_ref.actor.megatron.use_remove_padding=false
   actor_rollout_ref.actor.megatron.tensor_model_parallel_size=4
-  actor_rollout_ref.actor.megatron.pipeline_model_parallel_size=1
-  actor_rollout_ref.actor.megatron.context_parallel_size=1
   actor_rollout_ref.actor.megatron.expert_model_parallel_size=4
   actor_rollout_ref.actor.megatron.expert_tensor_parallel_size=1
   actor_rollout_ref.actor.megatron.param_offload=true
@@ -90,17 +81,13 @@ args=(
   actor_rollout_ref.actor.megatron.override_transformer_config.recompute_granularity=full
   actor_rollout_ref.actor.megatron.override_transformer_config.recompute_method=uniform
   actor_rollout_ref.actor.megatron.override_transformer_config.recompute_num_layers=1
-  actor_rollout_ref.ref.log_prob_use_dynamic_bsz=false
   actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1
   'actor_rollout_ref.ref.megatron.override_transformer_config={gradient_accumulation_fusion:false,attention_dropout:0.0,hidden_dropout:0.0}'
   actor_rollout_ref.rollout.n=8
-  actor_rollout_ref.rollout.val_kwargs.temperature=0
-  actor_rollout_ref.rollout.val_kwargs.n=1
   actor_rollout_ref.rollout.nnodes=1
   actor_rollout_ref.rollout.load_format=safetensors
   actor_rollout_ref.rollout.enable_prefix_caching=false
   actor_rollout_ref.rollout.logprobs_mode=raw_logprobs
-  actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=false
   actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
   actor_rollout_ref.rollout.checkpoint_engine.update_weights_bucket_megabytes=256
   +actor_rollout_ref.rollout.engine_kwargs.vllm_omni.pipeline_name=qwen3_omni_moe
@@ -108,7 +95,6 @@ args=(
   +actor_rollout_ref.rollout.engine_kwargs.vllm_omni.limit_mm_per_prompt.image=1
   +actor_rollout_ref.rollout.engine_kwargs.vllm_omni.limit_mm_per_prompt.video=0
   algorithm.adv_estimator=grpo
-  algorithm.use_kl_in_reward=false
   algorithm.rollout_correction.bypass_mode=false
   +ray_kwargs.ray_init.runtime_env.env_vars.VERL_USE_EXTERNAL_MODULES=verl_omni
   '+ray_kwargs.ray_init.runtime_env.env_vars.TENSORBOARD_DIR=${oc.env:TENSORBOARD_DIR}'
@@ -117,55 +103,33 @@ args=(
   '+ray_kwargs.ray_init.runtime_env.env_vars.PYTHONUNBUFFERED="1"'
   trainer.v1.trainer_mode=omni_separate_async
   trainer.v1.separate_async.parameter_sync_step=1
-  trainer.nnodes=1
   trainer.n_gpus_per_node=4
   trainer.resume_mode=disable
   'trainer.logger=[console,tensorboard]'
   trainer.project_name=qwen3_omni_avqa
   trainer.experiment_name=avqa_megatron_separate_async
   "trainer.default_local_dir=${RUN_DIR}/checkpoints"
-  '+ray_kwargs.ray_init.address=local'
-  ray_kwargs.ray_init.num_cpus=32
   "+ray_kwargs.ray_init.num_gpus=$NUM_GPUS"
-  '+ray_kwargs.ray_init.include_dashboard=false'
-  '+ray_kwargs.ray_init.object_store_memory=17179869184'
-  '+ray_kwargs.ray_init.runtime_env.env_vars.VLLM_ALLREDUCE_USE_SYMM_MEM="0"'
-  '+ray_kwargs.ray_init.runtime_env.env_vars.NCCL_NVLS_ENABLE="0"'
-  data.dataloader_num_workers=0
-  reward.num_workers=4
-  actor_rollout_ref.rollout.agent.num_workers=8
-  actor_rollout_ref.rollout.enforce_eager=true
   "actor_rollout_ref.rollout.n_gpus_per_node=$ROLLOUT_GPUS"
   "actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP"
   actor_rollout_ref.rollout.gpu_memory_utilization=0.4
   actor_rollout_ref.rollout.max_num_seqs=16
-  actor_rollout_ref.rollout.max_num_batched_tokens=8192
   actor_rollout_ref.actor.policy_loss.loss_mode=gspo
   actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-mean
   actor_rollout_ref.actor.clip_ratio_low=0.0003
   actor_rollout_ref.actor.clip_ratio_high=0.0004
-  trainer.v1.sampler.max_off_policy_threshold=8
-  trainer.v1.sampler.max_off_policy_strategy=drop
   "trainer.total_training_steps=$TOTAL_TRAINING_STEPS"
   "trainer.test_freq=$TEST_FREQ"
   trainer.save_freq=-1
-  trainer.val_before_train=true
-  data.val_max_samples=-1
-  "trainer.rollout_data_dir=$OUTPUT_DIR/samples/rollouts"
-  "trainer.validation_data_dir=$OUTPUT_DIR/samples/validation"
-  actor_rollout_ref.actor.optim.lr_warmup_steps=-1
-  actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0
-  actor_rollout_ref.actor.use_kl_loss=false
+  "trainer.rollout_data_dir=$RUN_DIR/samples/rollouts"
+  "trainer.validation_data_dir=$RUN_DIR/samples/validation"
   actor_rollout_ref.actor.optim.use_precision_aware_optimizer=true
-  actor_rollout_ref.rollout.temperature=1.0
-  actor_rollout_ref.rollout.top_p=1.0
   "data.max_prompt_length=$MAX_PROMPT_LENGTH"
   "data.max_response_length=$MAX_RESPONSE_LENGTH"
   "actor_rollout_ref.rollout.max_model_len=$((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH))"
   ++data.mm_processor_kwargs.sampling_rate=16000
   ++actor_rollout_ref.rollout.engine_kwargs.vllm_omni.limit_mm_per_prompt.audio=1
   reward.custom_reward_function.path=verl_omni/utils/reward_score/choice_reward.py
-  reward.custom_reward_function.name=compute_score
   "$@"
 )
 printf '%q ' "${PYTHON:-python3}" -m verl_omni.trainer.main_omni "${args[@]}" > "${RUN_DIR}/command.txt"

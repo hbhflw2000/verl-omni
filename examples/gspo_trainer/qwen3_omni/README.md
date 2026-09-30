@@ -1,6 +1,6 @@
 # Qwen3-Omni Thinker GSPO recipes
 
-Last updated: 09/28/2026
+Last updated: 09/29/2026
 
 This directory contains both FSDP2 and Megatron recipes. For non-Megatron
 setup, data preparation and training instructions, see the
@@ -190,8 +190,8 @@ This [AVQA launcher](run_qwen3_omni_megatron_avqa_separate_async.sh) trains the
 Qwen3-Omni Thinker language model on real image and audio inputs, with its
 vision and audio towers frozen. It uses GRPO advantages, GSPO sequence clipping,
 the repository's exact `choice_reward.py` scorer, and the V1 separate-async
-actor/rollout path. The launcher contains its own Megatron settings and does
-not invoke the Geo3K launcher. It does **not** train the Talker or provide a
+actor/rollout path. The launcher reuses `omni_megatron_trainer.yaml` with AVQA, model and topology
+overrides; it does not invoke another task launcher. It does **not** train the Talker or provide a
 video-training recipe.
 
 Convert the official AVQA-R1 archive with the existing
@@ -228,39 +228,54 @@ OUTPUT_DIR=/outputs/avqa \
 bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_avqa_separate_async.sh
 ```
 
-The supporting H200 run used the default eight-GPU layout: four Megatron actor
-GPUs (TP4/EP4) and four rollout GPUs (TP4), 4,096 prompt tokens, 2,048 response
-tokens, 16 prompts with eight responses, 150 updates and all 1,911 validation
-questions at steps 0/30/60/90/120/150. The actor uses a precision-aware
-optimizer with 100% CPU FP32 master-parameter offload: ordinary 50% offload still
-cloned an FP32 master parameter on GPU and OOMed at initialization. Plan for
-substantial host RAM and GPU memory. The recipe defaults to **no training
-checkpoint**; it retains the resolved config, command, raw TensorBoard,
-training log and generations.
-`NUM_GPUS=6 ROLLOUT_GPUS=2 ROLLOUT_TP=2` composes an optional six-card layout.
-Both layouts pass CPU configuration tests; recheck the resolved config before
-running. The self-contained revision has not yet had a separate GPU run.
-The script accepts later Hydra overrides for experiments, including different
-update/validation frequencies; review the resolved config each time.
-If `RAY_TMPDIR` is overridden, use a short absolute path: Ray's Unix socket
-paths have a length limit, and a long temporary directory can fail before
-GPU initialization.
+The default single-node layout uses four Megatron actor GPUs (TP4/EP4) and
+four rollout GPUs (TP4), 4,096 prompt tokens, 2,048 response tokens, and 16
+prompts with eight responses. Training defaults to 150 optimizer updates and
+complete validation every 30 updates. The actor uses a precision-aware
+optimizer with 100% CPU FP32 master-parameter offload to reduce GPU memory
+requirements; allow sufficient host RAM. The recipe saves **no checkpoints**
+and retains its resolved configuration, command, TensorBoard events, log and
+generations in one unique run directory.
 
-On H200, an earlier entry point using the same AVQA training settings completed
-150 real optimizer updates and all six full validations. Official choice
-accuracy was `1446/1911 → 1561/1911 → 1562/1911 → 1582/1911 → 1600/1911 →
-1642/1911`; official reward regrading found zero mismatches. Parseable answer
-tags rose from 1,800 to 1,905, so some of the measured gain is output-format
-compliance rather than established reasoning improvement. Final train/rollout
-probability Pearson was `0.998760`, rollout-correction KL `0.003430`, and
-gradient norm `0.28343`. After final validation, the run manager reported an
-ownership conflict and exited `-15`; all owned processes and GPU allocations
-were cleared. This is training and validation evidence, not a clean launcher
-exit or a GPU test of this final self-contained script.
-The tested environment used development dependency overrides. This result
-therefore does not validate an unmodified installation of the repository's
-dependency pins. Validation generations lack stable cross-step IDs; compare
-aggregate full-split scores only.
+`NUM_GPUS=6 ROLLOUT_GPUS=2 ROLLOUT_TP=2` selects a six-GPU layout. Extra Hydra
+arguments override the recipe settings. Ray CPU count and object-store size
+are not fixed by the launcher; set them for the allocated host when needed,
+for example `ray_kwargs.ray_init.num_cpus=32` and
+`+ray_kwargs.ray_init.object_store_memory=17179869184`. Communication-library
+settings belong to the deployment environment rather than this recipe.
+Review the resolved configuration after applying overrides.
+
+### Validation and dependencies
+
+The current launcher completed 10 optimizer updates on eight H200 GPUs
+(4 actor + 4 rollout, rollout TP4), with full 1,911-question validation at
+steps 0 and 10. Correct answers increased from 1,454 to 1,544; strict
+single-choice answer formatting increased from 1,806 to 1,899. Official
+reward regrading found zero mismatches, and the run exited with code 0.
+Loss, gradient norm, entropy, rollout-correction KL and train/rollout
+Pearson remained finite. This short run validates the launcher changes;
+it does not establish long-run convergence or a backend speedup.
+
+The standalone launcher at `a21bc851` completed 30 optimizer updates on six
+H200 GPUs with full 1,911-question validation at steps 0 and 30. Correct
+answers increased from 1,368 to 1,543 and parseable answers from 1,715 to
+1,902; official reward regrading found no mismatches. Logged loss, gradient
+norm, entropy, rollout-correction KL and train/rollout Pearson were finite.
+The run was intentionally stopped after the completed step-30 validation.
+
+An earlier entry point completed 150 updates and six full validations on
+eight H200 GPUs: correct answers increased from 1,446 to 1,642. Its
+TensorBoard curves are supporting evidence, not a GPU test of every later
+launcher revision. Improved formatting contributes to the reward gain;
+these results alone do not establish improved reasoning. Compare aggregate
+validation scores, since generations do not have stable cross-step IDs.
+
+These development runs used Megatron compatibility dependencies described
+above. The latest 10-update validation exercised the upstream CPU-snapshot
+function with its pin_memory calls intact; that tested configuration did
+not require the local snapshot change used by earlier runs. No snapshot
+patch is included in this recipe. Reproduction with the repository's
+complete set of unmodified dependency pins remains unverified.
 
 Focused CPU checks:
 

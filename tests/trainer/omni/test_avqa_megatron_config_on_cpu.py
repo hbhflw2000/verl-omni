@@ -12,8 +12,11 @@ import pytest
 from omegaconf import OmegaConf
 
 
-@pytest.mark.parametrize("num_gpus,rollout_gpus,rollout_tp", [(6, 2, 2), (8, 4, 4)])
-def test_avqa_full_model_recipe(tmp_path, num_gpus, rollout_gpus, rollout_tp):
+@pytest.mark.parametrize(
+    "num_gpus,rollout_gpus,rollout_tp,resource_overrides",
+    [(6, 2, 2, False), (8, 4, 4, False), (8, 4, 4, True)],
+)
+def test_avqa_full_model_recipe(tmp_path, num_gpus, rollout_gpus, rollout_tp, resource_overrides):
     root = Path(__file__).parents[3]
     launcher = root / "examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_avqa_separate_async.sh"
     env = dict(
@@ -28,8 +31,11 @@ def test_avqa_full_model_recipe(tmp_path, num_gpus, rollout_gpus, rollout_tp):
         ROLLOUT_TP=str(rollout_tp),
         PYTHON=sys.executable,
     )
+    command = ["bash", str(launcher)]
+    if resource_overrides:
+        command.extend(["ray_kwargs.ray_init.num_cpus=12", "+ray_kwargs.ray_init.object_store_memory=2147483648"])
     process = subprocess.Popen(
-        ["bash", str(launcher)],
+        command,
         cwd=root,
         env=env,
         start_new_session=True,
@@ -44,7 +50,7 @@ def test_avqa_full_model_recipe(tmp_path, num_gpus, rollout_gpus, rollout_tp):
         process.communicate(timeout=10)
         pytest.fail("AVQA config composition timed out")
     assert process.returncode == 0, stderr[-3000:]
-    [config_path] = tmp_path.glob("run.*/run.*/config.yaml")
+    [config_path] = tmp_path.glob("run.*/config.yaml")
     config = OmegaConf.load(config_path)
     actor, rollout = config.actor_rollout_ref.actor, config.actor_rollout_ref.rollout
     assert config.data.train_files == "/tmp/train_strict.parquet"
@@ -56,9 +62,30 @@ def test_avqa_full_model_recipe(tmp_path, num_gpus, rollout_gpus, rollout_tp):
         "audio": 1,
         "video": 0,
     }
+    assert actor.strategy == "megatron"
+    assert actor.megatron.tensor_model_parallel_size == 4
+    assert actor.megatron.expert_model_parallel_size == 4
+    assert actor.megatron.pipeline_model_parallel_size == 1
+    assert actor.megatron.context_parallel_size == 1
+    towers = actor.megatron.override_transformer_config
+    assert not towers.freeze_language_model
+    assert towers.freeze_vision_model and towers.freeze_audio_model
+    assert not actor.use_dynamic_bsz and not rollout.log_prob_use_dynamic_bsz
+    assert not config.actor_rollout_ref.ref.log_prob_use_dynamic_bsz
+    assert not config.algorithm.rollout_correction.bypass_mode
+    assert config.trainer.v1.separate_async.parameter_sync_step == 1
     assert config.trainer.n_gpus_per_node == 4
     assert rollout.n_gpus_per_node == rollout_gpus and rollout.tensor_model_parallel_size == rollout_tp
     assert config.ray_kwargs.ray_init.num_gpus == num_gpus
+    if resource_overrides:
+        assert config.ray_kwargs.ray_init.num_cpus == 12
+        assert config.ray_kwargs.ray_init.object_store_memory == 2147483648
+    else:
+        assert config.ray_kwargs.ray_init.num_cpus is None
+        assert "object_store_memory" not in config.ray_kwargs.ray_init
+    runtime_env = config.ray_kwargs.ray_init.runtime_env.env_vars
+    assert "NCCL_NVLS_ENABLE" not in runtime_env
+    assert "VLLM_ALLREDUCE_USE_SYMM_MEM" not in runtime_env
     assert actor.policy_loss.loss_mode == "gspo" and actor.loss_agg_mode == "seq-mean-token-mean"
     assert actor.optim.use_precision_aware_optimizer
     assert actor.optim.override_optimizer_config.optimizer_cpu_offload
