@@ -195,9 +195,8 @@ parity; evaluate the need for a new full-model run after reviewing the changes.
 The [standalone Geo3K launcher](run_qwen3_omni_megatron_geo3k_separate_async.sh)
 reuses `verl_omni/trainer/config/omni_megatron_trainer.yaml` and the existing
 Qwen3-Omni Megatron adapter. It trains the Thinker language model with frozen
-vision/audio towers; it neither calls the AudioMCQ launcher nor changes the
-shared optimizer, snapshot or synchronization implementations. The dependency
-prerequisites and BSHD/PP1/CP1 limitations in the AudioMCQ section also apply.
+vision/audio towers. The dependency prerequisites and BSHD/PP1/CP1 limitations
+in the AudioMCQ section also apply.
 
 Prepare [Geometry3K](https://huggingface.co/datasets/hiyouga/geometry3k) with the
 converter below. Check the dataset card and original Geometry3K license before
@@ -214,37 +213,27 @@ OUTPUT_DIR=/outputs/geo3k \
 bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_geo3k_separate_async.sh
 ```
 
-The converter preserves source image bytes and refuses to replace existing
-parquet outputs unless `--overwrite` is explicitly supplied.
+Defaults use eight GPUs: four TP4/EP4 actor GPUs and four TP4 rollout GPUs,
+GRPO advantages with GSPO clipping (`0.0003`/`0.0004`), LR `1e-6`, and 16 prompts
+with 8 samples each. Prompt/response limits are 1024/3072 tokens; old-policy and
+actor microbatches are both one. Dynamic batching, remove padding, reference KL
+and LR warmup are disabled. Precision-aware optimization offloads FP32 optimizer
+states to CPU; the trajectory-lag threshold is one. The launcher requests 150
+updates, full validation before training and every 10 updates, and no checkpoints.
+Each launch retains its command, resolved configuration, TensorBoard, log and
+generations in a unique directory. CLI overrides remain last; preprocessing
+requires `--overwrite` to replace existing parquet files.
 
-Defaults use one eight-GPU node: four TP4/EP4 actor GPUs and four TP4 rollout
-GPUs. The objective is GRPO advantages with GSPO sequence clipping
-(`clip_ratio_low=0.0003`, `clip_ratio_high=0.0004`), sequence-mean token-mean
-aggregation, no reference-policy KL and no LR warmup. LR is `1e-6`, each update
-uses 16 prompts with 8 samples, and prompt/response limits are 1024/3072 tokens.
-Old-policy and actor microbatches both remain one; dynamic batching and remove
-padding are disabled. Precision-aware optimization offloads FP32 optimizer states
-to CPU. The sampler drops trajectories beyond its threshold of one; that setting
-does not by itself prove zero policy lag. Defaults request 150 updates, complete
-validation before training and every 10 updates, and no checkpoints. Each launch
-retains its command, resolved configuration, TensorBoard, training log and
-validation/rollout generations in a unique directory. CLI overrides remain last.
+An eight-H800 development run completed 129 optimizer updates before a user-requested
+stop (exit `-15`). Full 601-question validation ran at steps 0/30/60/90/120.
+Validation reward increased from `0.614309` to `0.679035`: correct answers rose
+from 361 to 393 and strict-format answers from 443 to 544. Official reward
+regrading had zero mismatches. The English-only figure shows unsmoothed validation
+reward (90% answer accuracy, 10% strict format) and its two components.
 
-An H800 eight-GPU development run used this formulation and completed 129 actual
-updates before the user requested a stop (exit `-15`, not natural success).
-Complete 601-question validation ran at steps 0/30/60/90/120, rather than every
-10. Official correct counts were 361/366/372/390/393 and strict-format counts
-443/516/536/543/544; all reward regrades matched. Final measured answer accuracy
-improved by 32 questions (5.32 percentage points), while format validity also
-contributed to the composite score. This run used development dependencies,
-CPU optimizer offload and deployment-specific overrides; it does not validate
-an unmodified installation of every repository pin or the final default launcher.
-No step-129 or step-150 fixed validation is claimed. Reference KL was disabled;
-rollout-correction KL is a separate metric. Short CPU/tiny-model tests establish
-input and gradient behavior, not full distributed convergence.
+![H800 Geo3K validation reward and answer/format accuracy](https://raw.githubusercontent.com/hbhflw2000/verl-omni/41d2d43f06ec100ec95be88e7f664ba901901987/docs/evidence/geo3k/lag1-val-core-final-english-20261001.png)
 
-```bash
-python -m pytest -q tests/utils/test_geo3k_data_process_on_cpu.py \
-  tests/pipelines/test_geo3k_toy_image_on_cpu.py \
-  tests/trainer/omni/test_geo3k_megatron_config_on_cpu.py
-```
+See the [full TensorBoard metrics](https://raw.githubusercontent.com/hbhflw2000/verl-omni/41d2d43f06ec100ec95be88e7f664ba901901987/docs/evidence/geo3k/lag1-tb-matrix-final-english-20261001.png)
+for training-batch reward and other diagnostics. This run used an earlier entry
+point, development dependencies and recorded overrides; it does not establish
+exact-head reproduction of the final launcher with unchanged public pins.
