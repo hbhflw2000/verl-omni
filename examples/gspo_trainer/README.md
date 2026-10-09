@@ -721,4 +721,4 @@ examples/gspo_trainer/
 └── README.md                                         ← (this file)
 ```
 
-For the GPU Megatron Geo3K image-conditioned recipe, see the [Qwen3-Omni guide](qwen3_omni/README.md#geo3k-image-conditioned-megatron-separate-async).
+For the GPU Megatron Geo3K image-conditioned recipe, see the [Qwen3-Omni guide](https://github.com/verl-project/verl-omni/blob/main/examples/gspo_trainer/qwen3_omni/README.md#geo3k-image-conditioned-megatron-separate-async).

@@ -289,7 +289,7 @@ python -m pytest -q tests/utils/test_avqa_data_process_on_cpu.py \
 
 ## Geo3K image-conditioned Megatron separate-async
 
-The [standalone Geo3K launcher](run_qwen3_omni_megatron_geo3k_separate_async.sh)
+The [standalone Geo3K launcher](https://github.com/verl-project/verl-omni/blob/main/examples/gspo_trainer/qwen3_omni/run_qwen3_omni_megatron_geo3k_separate_async.sh)
 reuses `verl_omni/trainer/config/omni_megatron_trainer.yaml` and the existing
 Qwen3-Omni Megatron adapter. It trains the Thinker language model with frozen
 vision/audio towers. The dependency prerequisites and BSHD/PP1/CP1 limitations
