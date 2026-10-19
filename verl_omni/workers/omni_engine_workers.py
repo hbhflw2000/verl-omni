@@ -18,10 +18,11 @@ from typing import Optional
 import torch
 from omegaconf import DictConfig
 from verl.experimental.separation.engine_workers import DetachActorWorker
-from verl.single_controller.base.decorator import Dispatch, register
+from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
 from verl.workers.config import DistillationConfig
 
 from verl_omni.workers.engine_workers import ActorRolloutRefWorker
+from verl_omni.workers.utils.cohort_transport import cohort_transport
 from verl_omni.workers.utils.parameter_revision import parameter_access
 
 __all__ = ["OmniDetachActorWorker"]
@@ -80,6 +81,27 @@ class OmniDetachActorWorker(ActorRolloutRefWorker, DetachActorWorker):
     @parameter_access("actor.engine")
     def clear_cpu_model(self, n):
         return super().clear_cpu_model(n)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    @parameter_access("actor.engine")
+    def qualify_proximal_actor(self):
+        from verl_omni.workers.utils.proximal_rpc import qualify_actor
+
+        return qualify_actor(self)
+
+    @cohort_transport
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+    def prepare_proximal_actor(self, data):
+        from verl_omni.workers.utils.proximal_rpc import prepare_actor
+
+        return prepare_actor(self, data, group=torch.distributed.group.WORLD)
+
+    @cohort_transport
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
+    def update_proximal_actor(self, data):
+        from verl_omni.workers.utils.proximal_rpc import update_actor
+
+        return update_actor(self, data, group=torch.distributed.group.WORLD)
 
 
 def _owning_cpu_state(value):

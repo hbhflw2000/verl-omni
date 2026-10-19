@@ -21,6 +21,11 @@ from verl_omni.workers.utils.training_output import detach_microbatch_outputs
 class OmniMegatronEngine(ParameterTrackingMixin, MegatronEngineWithLMHead):
     """Use verl's LM flow with the registered pipeline's Megatron model call."""
 
+    def proximal_execution(self):
+        from verl_omni.workers.utils.proximal_execution import megatron_proximal_execution
+
+        return megatron_proximal_execution(self)
+
     def __init__(self, model_config, engine_config, optimizer_config, checkpoint_config):
         self.model_adapter_cls = OmniModelBase.get_class(model_config)
         model_config = self.model_adapter_cls.prepare_megatron_config(model_config, engine_config)

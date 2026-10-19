@@ -55,7 +55,6 @@ from verl.workers.config import (
 )
 from verl.workers.rollout.base import BaseRollout, get_rollout_class
 from verl.workers.rollout.vllm_rollout.bucketed_weight_transfer import BucketedWeightSender
-from verl.workers.utils.losses import ppo_loss
 
 from verl_omni.pipelines.utils import build_scheduler
 from verl_omni.utils.mfu import (
@@ -73,6 +72,7 @@ from verl_omni.workers.rollout.base import get_rollout_sequence_parallel_size
 from verl_omni.workers.rollout.vllm_rollout.zmq_utils import make_update_zmq_handle, make_update_zmq_id
 from verl_omni.workers.utils.losses import diffusion_loss, omni_loss
 from verl_omni.workers.utils.parameter_revision import parameter_access
+from verl_omni.workers.utils.proximal_anchor import proximal_ppo_loss as ppo_loss
 from verl_omni.workers.utils.training_output import prepare_single_update_batch, restore_single_update_output
 
 logger = logging.getLogger(__file__)
