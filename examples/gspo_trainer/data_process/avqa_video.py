@@ -8,6 +8,7 @@ import json
 from collections import Counter
 from numbers import Integral
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
@@ -181,12 +182,21 @@ def main():
         "max_frames": args.max_frames,
         **audit_annotation_splits(args.train_json, args.validation_json),
     }
-    for split, source, filename in (
-        ("train", args.train_json, "train.parquet"),
-        ("validation", args.validation_json, "validation.parquet"),
-    ):
-        manifest[split] = convert_split(source, args.video_root, output / filename, split, args.fps, args.max_frames)
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Conversion failures must not leave partial outputs or replace existing data.
+    with TemporaryDirectory(prefix=f".{output.name}-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        for split, source, filename in (
+            ("train", args.train_json, "train.parquet"),
+            ("validation", args.validation_json, "validation.parquet"),
+        ):
+            manifest[split] = convert_split(
+                source, args.video_root, staging / filename, split, args.fps, args.max_frames
+            )
+        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        output.mkdir(parents=True, exist_ok=True)
+        for filename in ("train.parquet", "validation.parquet", "manifest.json"):
+            (staging / filename).replace(output / filename)
     print(json.dumps(manifest, indent=2))
 
 

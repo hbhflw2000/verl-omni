@@ -194,3 +194,63 @@ def test_cross_split_question_overlap_is_rejected_before_any_output(tmp_path, mo
     with pytest.raises(ValueError, match="question ids overlap"):
         avqa_video.main()
     assert not output.exists()
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize("failure", ["empty_validation", "parquet_write"])
+def test_failed_conversion_preserves_output_and_allows_retry(tmp_path, monkeypatch, overwrite, failure):
+    train, validation = tmp_path / "train.json", tmp_path / "validation.json"
+    train.write_text(json.dumps([record()]))
+    validation.write_text(
+        json.dumps([record(id=1140, video_name="missing" if failure == "empty_validation" else "06GyG4-wONQ_000006")])
+    )
+    (tmp_path / "06GyG4-wONQ_000006.mp4").touch()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "unrelated.txt").write_bytes(b"keep unrelated files")
+    names = ("train.parquet", "validation.parquet", "manifest.json")
+    if overwrite:
+        for name in names:
+            (output / name).write_bytes(f"original {name}".encode())
+    original = {path.name: path.read_bytes() for path in output.iterdir()}
+    argv = [
+        "avqa_video.py",
+        "--train_json",
+        str(train),
+        "--validation_json",
+        str(validation),
+        "--video_root",
+        str(tmp_path),
+        "--output_dir",
+        str(output),
+    ]
+    if overwrite:
+        argv.append("--overwrite")
+    monkeypatch.setattr("sys.argv", argv)
+    to_parquet = pd.DataFrame.to_parquet
+
+    def fail_validation_write(frame, path, **kwargs):
+        if Path(path).name == "validation.parquet":
+            Path(path).write_bytes(b"partial parquet")
+            raise OSError("Simulated parquet write failure")
+        return to_parquet(frame, path, **kwargs)
+
+    with monkeypatch.context() as patch:
+        if failure == "parquet_write":
+            patch.setattr(pd.DataFrame, "to_parquet", fail_validation_write)
+        error = OSError if failure == "parquet_write" else ValueError
+        message = "Simulated parquet write failure" if failure == "parquet_write" else "No valid video examples"
+        with pytest.raises(error, match=message):
+            avqa_video.main()
+    assert {path.name: path.read_bytes() for path in output.iterdir()} == original
+    assert not list(tmp_path.glob(".output-*"))
+
+    validation.write_text(json.dumps([record(id=1140)]))
+    avqa_video.main()
+    assert (output / "unrelated.txt").read_bytes() == original["unrelated.txt"]
+    manifest = json.loads((output / "manifest.json").read_text())
+    for split, identity in (("train", "1139"), ("validation", "1140")):
+        [row] = pd.read_parquet(output / f"{split}.parquet").to_dict("records")
+        assert row["extra_info"]["problem_id"] == identity
+        assert manifest[split] == {"input": 1, "kept": 1, "dropped": {}}
+    assert not list(tmp_path.glob(".output-*"))
